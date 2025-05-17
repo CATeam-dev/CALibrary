@@ -6,7 +6,7 @@ import path from 'node:path';
 import { Hono } from 'hono';
 import { prettyJSON } from 'hono/pretty-json';
 
-import { accessLogger, performanceLogger, staticFileMiddleware } from './core/middleware';
+import { accessLogger, performanceLogger } from './core/middleware';
 import { registerRoutes } from './core/router';
 import logger from './utils/logger';
 import { prepareSslCerts, launchHttp, launchHttps } from './utils/server';
@@ -33,7 +33,12 @@ for (const controller of controllerList) {
 // Register routes
 registerRoutes(app);
 
-app.use('*', staticFileMiddleware);
+// 全局路由处理程序 - 放在静态文件中间件之前
+app.all('*', (c) => {
+    return c.html(
+        `<body><h1>WHAT ARE YOU LOOKING FOR?</h1><p>A MIKU?</p><pre>${fs.readFileSync(`./art/${Math.floor(Math.random() * 3)}.txt`)}</pre></body>`
+    );
+});
 
 const webAppUrl = process.env.WEB_APP_URL || 'undefined';
 const sslEnabled = process.env.SSL_ENABLE === 'true';

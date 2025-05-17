@@ -19,7 +19,7 @@ export const ROUTE_METADATA = 'route';
 /**
  * HTTP 方法类型
  */
-export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH';
+export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'PROPFIND';
 
 /**
  * 路由元数据接口
@@ -78,3 +78,4 @@ export const Post = createRouteDecorator('POST');
 export const Put = createRouteDecorator('PUT');
 export const Delete = createRouteDecorator('DELETE');
 export const Patch = createRouteDecorator('PATCH');
+export const Props = createRouteDecorator('PROPFIND');

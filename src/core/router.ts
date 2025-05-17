@@ -40,10 +40,21 @@ function registerController(app: Hono, controller: any) {
         // 规范化路径
         const fullPath = normalizePath(`${prefix}${path}`);
 
-        if (middlewares && middlewares.length > 0) {
-            (app[methodName] as Function)(fullPath, ...middlewares, handler);
+        // 处理自定义HTTP方法
+        if (!app[methodName as keyof Hono]) {
+            // 对于不支持的方法，使用on方法
+            if (middlewares && middlewares.length > 0) {
+                app.on(method, fullPath, ...middlewares, handler);
+            } else {
+                app.on(method, fullPath, handler);
+            }
         } else {
-            (app[methodName] as Function)(fullPath, handler);
+            // 标准HTTP方法
+            if (middlewares && middlewares.length > 0) {
+                (app[methodName] as Function)(fullPath, ...middlewares, handler);
+            } else {
+                (app[methodName] as Function)(fullPath, handler);
+            }
         }
     }
 
