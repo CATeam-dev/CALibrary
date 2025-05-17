@@ -1,0 +1,4 @@
+if git diff-tree --name-only -r ORIG_HEAD HEAD | grep -E "prisma/schema.prisma" > /dev/null; then
+  echo "检测到数据库变更，自动更新数据库..."
+  bun db
+fi 

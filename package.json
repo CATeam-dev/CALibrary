@@ -3,10 +3,49 @@
   "module": "src/index.ts",
   "type": "module",
   "private": true,
+  "scripts": {
+    "lint": "eslint --fix .",
+    "commit": "czg",
+    "dev": "NODE_ENV=development bun run src/index.ts",
+    "start": "NODE_ENV=production bun run src/index.ts",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:studio": "prisma studio",
+    "db": "bun db:generate && bun db:migrate",
+    "prepare": "husky",
+    "lint-staged": "lint-staged"
+  },
   "devDependencies": {
-    "@types/bun": "latest"
+    "@types/bun": "latest",
+    "@typescript-eslint/eslint-plugin": "^8.31.1",
+    "@typescript-eslint/parser": "^8.31.1",
+    "czg": "^1.11.1",
+    "eslint": "^9.26.0",
+    "eslint-plugin-import": "^2.31.0",
+    "eslint-plugin-prettier": "^5.3.1",
+    "eslint-plugin-unused-imports": "^4.1.4",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.0.0",
+    "prettier": "^3.5.3",
+    "prisma": "^6.8.1"
   },
   "peerDependencies": {
-    "typescript": "^5"
+    "typescript": "^5.8.3"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.14.1",
+    "@paralleldrive/cuid2": "^2.2.2",
+    "@prisma/client": "^6.8.1",
+    "axios": "^1.9.0",
+    "dayjs": "^1.11.13",
+    "hono": "^4.7.9",
+    "node-cache": "^5.1.2",
+    "picocolors": "^1.1.1",
+    "reflect-metadata": "^0.2.2"
+  },
+  "lint-staged": {
+    "*.{js,ts}": [
+      "eslint --fix"
+    ]
   }
 }
