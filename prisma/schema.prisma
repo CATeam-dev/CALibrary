@@ -14,13 +14,70 @@ datasource db {
     url      = env("DATABASE_URL")
 }
 
-model Book {
-    id     String @id @default(cuid())
-    title  String
-    author String
+model Category {
+    id    String @id @default(cuid())
+    name  String
+    color String
+    books Book[]
 
-    downloadCount Int @default(0)
+    count Int @default(0)
+    index Int @default(0)
 
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
+}
+
+model Book {
+    id          String @id @default(cuid())
+    title       String
+    author      String
+    cover       String
+    description String
+
+    zlib String?
+
+    categoryId String
+
+    downloadCount Int @default(0)
+    viewCount     Int @default(0)
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    Category Category? @relation(fields: [categoryId], references: [id])
+    File     File[]
+}
+
+enum FileFormat {
+    PDF
+    EPUB
+    TXT
+}
+
+model File {
+    id     String     @id @default(cuid())
+    format FileFormat
+    size   Int
+    desc   String // 描述, 高清扫描等
+    hash   String
+    bookId String
+    chunks Int
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+
+    Book       Book        @relation(fields: [bookId], references: [id])
+    FileChunks FileChunk[]
+}
+
+model FileChunk {
+    id     String @id @default(cuid())
+    fileId String
+    chunk  Int
+    hash   String
+    size   Int
+
+    createdAt DateTime @default(now())
+    updatedAt DateTime @updatedAt
+    File      File     @relation(fields: [fileId], references: [id])
 }
