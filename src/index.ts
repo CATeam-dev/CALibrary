@@ -5,11 +5,16 @@ import path from 'node:path';
 
 import { Hono } from 'hono';
 import { prettyJSON } from 'hono/pretty-json';
+import { jwt } from 'hono/jwt';
+import { cors } from 'hono/cors';
 
 import { accessLogger, performanceLogger } from './core/middleware';
 import { registerRoutes } from './core/router';
 import logger from './utils/logger';
 import { prepareSslCerts, launchHttp, launchHttps } from './utils/server';
+import './bot';
+import { jwtSecret } from './utils/jwt';
+import { init } from './tasks/init';
 
 if (!Reflect || !Reflect.getMetadata) {
     throw new Error('reflect-metadata is not properly initialized');
@@ -21,6 +26,7 @@ const app = new Hono();
 app.use('*', accessLogger);
 app.use('*', performanceLogger());
 app.use('*', prettyJSON());
+app.use('*', cors());
 
 // 先加载所有controllers
 const controllerList = fs.readdirSync(path.join(__dirname, 'controllers'));
@@ -33,12 +39,21 @@ for (const controller of controllerList) {
 // Register routes
 registerRoutes(app);
 
+const jwtMiddleware = jwt({
+    secret: jwtSecret,
+    cookie: 'jwt',
+});
+
+// app.use('/admin/*', jwtMiddleware);
+
 // 全局路由处理程序 - 放在静态文件中间件之前
 app.all('*', (c) => {
     return c.html(
         `<body><h1>WHAT ARE YOU LOOKING FOR?</h1><p>A MIKU?</p><pre>${fs.readFileSync(`./art/${Math.floor(Math.random() * 3)}.txt`)}</pre></body>`
     );
 });
+
+await init();
 
 const webAppUrl = process.env.WEB_APP_URL || 'undefined';
 const sslEnabled = process.env.SSL_ENABLE === 'true';

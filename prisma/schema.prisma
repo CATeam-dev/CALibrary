@@ -16,7 +16,8 @@ datasource db {
 
 model Category {
     id    String @id @default(cuid())
-    name  String
+    name  String // 分类名称
+    path  String // 目录英文
     color String
     books Book[]
 
@@ -28,11 +29,12 @@ model Category {
 }
 
 model Book {
-    id          String @id @default(cuid())
+    id          String  @id @default(cuid())
     title       String
     author      String
     cover       String
     description String
+    public      Boolean @default(false)
 
     zlib String?
 
@@ -55,18 +57,21 @@ enum FileFormat {
 }
 
 model File {
-    id     String     @id @default(cuid())
-    format FileFormat
-    size   Int
-    desc   String // 描述, 高清扫描等
-    hash   String
-    bookId String
-    chunks Int
+    id          String     @id @default(cuid())
+    format      FileFormat
+    size        Int
+    desc        String // 描述, 高清扫描等
+    hash        String
+    filename    String // 原始上传文件名
+    bookId      String? // 允许为空，未绑定书籍
+    chunks      Int
+    createdBy   String // 上传用户名
+    versionDesc String? // 版本描述
 
     createdAt DateTime @default(now())
     updatedAt DateTime @updatedAt
 
-    Book       Book        @relation(fields: [bookId], references: [id])
+    Book       Book?       @relation(fields: [bookId], references: [id])
     FileChunks FileChunk[]
 }
 
