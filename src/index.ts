@@ -49,7 +49,8 @@ const jwtMiddleware = jwt({
 // 全局路由处理程序 - 放在静态文件中间件之前
 app.all('*', (c) => {
     return c.html(
-        `<body><h1>WHAT ARE YOU LOOKING FOR?</h1><p>A MIKU?</p><pre>${fs.readFileSync(`./art/${Math.floor(Math.random() * 3)}.txt`)}</pre></body>`
+        `<body><h1>WHAT ARE YOU LOOKING FOR?</h1><p>A MIKU?</p><pre>${fs.readFileSync(`./art/${Math.floor(Math.random() * 3)}.txt`)}</pre></body>`,
+        404
     );
 });
 

@@ -17,7 +17,7 @@ datasource db {
 model Category {
     id    String @id @default(cuid())
     name  String // 分类名称
-    path  String // 目录英文
+    path  String @unique // 目录英文
     color String
     books Book[]
 

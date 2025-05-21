@@ -15,18 +15,50 @@ export class AdminController {
 
     @Get('/category')
     async category(c: Context) {
-        const categories = await prisma.category.findMany({ orderBy: { index: 'asc' } });
-        return c.json({ code: 0, data: categories });
+        // 获取所有分类及其包含的书籍数量
+        const categories = await prisma.category.findMany({
+            orderBy: { index: 'asc' },
+        });
+
+        // 手动获取每个分类的书籍数量
+        const categoriesWithBookCount = await Promise.all(
+            categories.map(async (category) => {
+                const bookCount = await prisma.book.count({
+                    where: { categoryId: category.id },
+                });
+                return {
+                    ...category,
+                    bookCount,
+                };
+            })
+        );
+
+        return c.json({ code: 0, data: categoriesWithBookCount });
     }
 
-    @Get('/category/:id')
-    async getCategoryDetail(c: Context) {
-        const { id } = c.req.param();
-        const category = await prisma.category.findUnique({ where: { id } });
+    @Get('/category/:path')
+    async getCategoryById(c: Context) {
+        const { path } = c.req.param();
+        const category = await prisma.category.findFirst({
+            where: { path },
+        });
+
         if (!category) {
             return c.json({ code: 1, message: 'Category not found' });
         }
-        return c.json({ code: 0, data: category });
+
+        // 获取该分类下的书籍数量
+        const bookCount = await prisma.book.count({
+            where: { categoryId: category.id },
+        });
+
+        return c.json({
+            code: 0,
+            data: {
+                ...category,
+                bookCount,
+            },
+        });
     }
 
     @Post('/category')
@@ -110,36 +142,18 @@ export class AdminController {
         if (!book) {
             return c.json({ code: 1, message: 'Book not found' });
         }
-        return c.json({
-            code: 0,
-            data: {
-                ...book,
-                category: book.Category
-                    ? {
-                          id: book.Category.id,
-                          name: book.Category.name,
-                          path: book.Category.path,
-                          color: book.Category.color,
-                      }
-                    : null,
-                formats: book.File ? book.File.map((f: any) => f.format) : [],
-            },
+        return ResponseUtil.success(c, {
+            ...book,
+            category: book.Category,
+            formats: book.File ? book.File.map((f: any) => f.format) : [],
         });
     }
 
     @Post('/book')
     async createBook(c: Context) {
-        const {
-            title,
-            author,
-            cover,
-            categoryId,
-            description,
-            public: isPublic,
-            zlib,
-        } = await c.req.json();
+        const { title, author, cover, categoryId, description, zlib } = await c.req.json();
         const book = await prisma.book.create({
-            data: { title, author, cover, categoryId, description, public: isPublic, zlib },
+            data: { title, author, cover, categoryId, description, zlib },
         });
         return c.json({ code: 0, data: book });
     }
@@ -148,6 +162,17 @@ export class AdminController {
     async updateBook(c: Context) {
         const { id } = c.req.param();
         const data = await c.req.json();
+
+        if (data.public) {
+            // check format exists
+            const file = await prisma.file.findFirst({
+                where: { bookId: id },
+            });
+            if (!file) {
+                return ResponseUtil.error(c, 'Book has no format');
+            }
+        }
+
         try {
             const book = await prisma.book.update({ where: { id }, data });
             return c.json({ code: 0, data: book });
@@ -229,5 +254,36 @@ export class AdminController {
         } catch (error: any) {
             return c.json({ code: 1, message: error.message });
         }
+    }
+
+    @Get('/book/random')
+    async getRandomBook(c: Context) {
+        const count = await prisma.book.count({ where: { public: true } });
+        const skip = Math.floor(Math.random() * count);
+        const book = await prisma.book.findFirst({
+            where: { public: true },
+            skip,
+            include: { Category: true, File: true },
+        });
+
+        if (!book) {
+            return c.json({ code: 1, message: 'No books found' });
+        }
+
+        return c.json({
+            code: 0,
+            data: {
+                ...book,
+                category: book.Category
+                    ? {
+                          id: book.Category.id,
+                          name: book.Category.name,
+                          path: book.Category.path,
+                          color: book.Category.color,
+                      }
+                    : null,
+                formats: book.File ? book.File.map((f: any) => f.format) : [],
+            },
+        });
     }
 }

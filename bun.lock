@@ -4,7 +4,7 @@
     "": {
       "name": "calib",
       "dependencies": {
-        "@hono/node-server": "^1.14.1",
+        "@hono/node-server": "^1.14.2",
         "@paralleldrive/cuid2": "^2.2.2",
         "@prisma/client": "^6.8.1",
         "axios": "^1.9.0",
@@ -14,6 +14,7 @@
         "hono": "^4.7.9",
         "node-cache": "^5.1.2",
         "picocolors": "^1.1.1",
+        "prisma-extension-random": "^0.2.2",
         "proxy-agent": "^6.5.0",
         "reflect-metadata": "^0.2.2",
       },
@@ -58,7 +59,7 @@
 
     "@grammyjs/types": ["@grammyjs/types@3.20.0", "https://registry.npmmirror.com/@grammyjs/types/-/types-3.20.0.tgz", {}, "sha512-KIoikN5VTj6dcJpzMwXtouzaN3BZJ4jihBuEeXzWr25HtEfCF25V3dN11u+uNYi/9sBDvs0KCKZhyN/xFY0MBg=="],
 
-    "@hono/node-server": ["@hono/node-server@1.14.1", "https://registry.npmmirror.com/@hono/node-server/-/node-server-1.14.1.tgz", { "peerDependencies": { "hono": "^4" } }, "sha512-vmbuM+HPinjWzPe7FFPWMMQMsbKE9gDPhaH0FFdqbGpkT5lp++tcWDTxwBl5EgS5y6JVgIaCdjeHRfQ4XRBRjQ=="],
+    "@hono/node-server": ["@hono/node-server@1.14.2", "https://registry.npmmirror.com/@hono/node-server/-/node-server-1.14.2.tgz", { "peerDependencies": { "hono": "^4" } }, "sha512-GHjpOeHYbr9d1vkID2sNUYkl5IxumyhDrUJB7wBp7jvqYwPFt+oNKsAPBRcdSbV7kIrXhouLE199ks1QcK4r7A=="],
 
     "@humanfs/core": ["@humanfs/core@0.19.1", "https://registry.npmmirror.com/@humanfs/core/-/core-0.19.1.tgz", {}, "sha512-5DyQ4+1JEUzejeK1JGICcideyfUbGixgS9jNgex5nqkW+cY7WZhxBigmieN5Qnw9ZosSNVC9KQKyb+GUaGyKUA=="],
 
@@ -547,6 +548,8 @@
     "prettier-linter-helpers": ["prettier-linter-helpers@1.0.0", "https://registry.npmmirror.com/prettier-linter-helpers/-/prettier-linter-helpers-1.0.0.tgz", { "dependencies": { "fast-diff": "^1.1.2" } }, "sha512-GbK2cP9nraSSUF9N2XwUwqfzlAFlMNYYl+ShE/V+H8a9uNl/oUqB1w2EL54Jh0OlyRSd8RfWYJ3coVS4TROP2w=="],
 
     "prisma": ["prisma@6.8.2", "https://registry.npmmirror.com/prisma/-/prisma-6.8.2.tgz", { "dependencies": { "@prisma/config": "6.8.2", "@prisma/engines": "6.8.2" }, "peerDependencies": { "typescript": ">=5.1.0" }, "optionalPeers": ["typescript"], "bin": { "prisma": "build/index.js" } }, "sha512-JNricTXQxzDtRS7lCGGOB4g5DJ91eg3nozdubXze3LpcMl1oWwcFddrj++Up3jnRE6X/3gB/xz3V+ecBk/eEGA=="],
+
+    "prisma-extension-random": ["prisma-extension-random@0.2.2", "https://registry.npmmirror.com/prisma-extension-random/-/prisma-extension-random-0.2.2.tgz", { "peerDependencies": { "@prisma/client": "*" } }, "sha512-tjY5w2pSIgwQh0tDT98KTTYJ0uadUwfbTH+6QbPCfLg+gesgeLZNO4oKv8O6/udx54QvEbyXgNC1LUcjtoypcg=="],
 
     "proxy-agent": ["proxy-agent@6.5.0", "https://registry.npmmirror.com/proxy-agent/-/proxy-agent-6.5.0.tgz", { "dependencies": { "agent-base": "^7.1.2", "debug": "^4.3.4", "http-proxy-agent": "^7.0.1", "https-proxy-agent": "^7.0.6", "lru-cache": "^7.14.1", "pac-proxy-agent": "^7.1.0", "proxy-from-env": "^1.1.0", "socks-proxy-agent": "^8.0.5" } }, "sha512-TmatMXdr2KlRiA2CyDu8GqR8EjahTG3aY3nXjdzFyoZbmB8hrBsTyMezhULIXKnC0jpfjlmiZ3+EaCzoInSu/A=="],
 
