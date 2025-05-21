@@ -33,7 +33,7 @@ export class AdminController {
             })
         );
 
-        return c.json({ code: 0, data: categoriesWithBookCount });
+        return ResponseUtil.success(c, categoriesWithBookCount);
     }
 
     @Get('/category/:path')
@@ -44,7 +44,7 @@ export class AdminController {
         });
 
         if (!category) {
-            return c.json({ code: 1, message: 'Category not found' });
+            return ResponseUtil.error(c, 'Category not found');
         }
 
         // 获取该分类下的书籍数量
@@ -52,12 +52,9 @@ export class AdminController {
             where: { categoryId: category.id },
         });
 
-        return c.json({
-            code: 0,
-            data: {
-                ...category,
-                bookCount,
-            },
+        return ResponseUtil.success(c, {
+            ...category,
+            bookCount,
         });
     }
 
@@ -65,7 +62,7 @@ export class AdminController {
     async createCategory(c: Context) {
         const { name, path, color } = await c.req.json();
         const category = await prisma.category.create({ data: { name, path, color } });
-        return c.json({ code: 0, data: category });
+        return ResponseUtil.success(c, category);
     }
 
     @Put('/category/:id')
@@ -77,9 +74,9 @@ export class AdminController {
                 where: { id },
                 data: { name, path, color },
             });
-            return c.json({ code: 0, data: category });
+            return ResponseUtil.success(c, category);
         } catch (error: any) {
-            return c.json({ code: 1, message: error.message });
+            return ResponseUtil.error(c, error.message);
         }
     }
 
@@ -88,14 +85,14 @@ export class AdminController {
         const { id } = c.req.param();
         const category = await prisma.category.findUnique({ where: { id } });
         if (!category) {
-            return c.json({ code: 1, message: 'Category not found' });
+            return ResponseUtil.error(c, 'Category not found');
         }
         const books = await prisma.book.findMany({ where: { categoryId: id } });
         if (books.length > 0) {
-            return c.json({ code: 1, message: 'Category has books' });
+            return ResponseUtil.error(c, 'Category has books');
         }
         await prisma.category.delete({ where: { id } });
-        return c.json({ code: 0, message: 'Category deleted' });
+        return ResponseUtil.success(c, 'Category deleted');
     }
 
     @Get('/book')
@@ -112,8 +109,7 @@ export class AdminController {
             take: pageSizeInt,
             include: { Category: true, File: true },
         });
-        return c.json({
-            code: 0,
+        return ResponseUtil.success(c, {
             books: books.map((b) => ({
                 ...b,
                 category: b.Category
@@ -140,7 +136,7 @@ export class AdminController {
             include: { Category: true, File: true },
         });
         if (!book) {
-            return c.json({ code: 1, message: 'Book not found' });
+            return ResponseUtil.error(c, 'Book not found');
         }
         return ResponseUtil.success(c, {
             ...book,
@@ -155,7 +151,7 @@ export class AdminController {
         const book = await prisma.book.create({
             data: { title, author, cover, categoryId, description, zlib },
         });
-        return c.json({ code: 0, data: book });
+        return ResponseUtil.success(c, book);
     }
 
     @Put('/book/:id')
@@ -175,9 +171,9 @@ export class AdminController {
 
         try {
             const book = await prisma.book.update({ where: { id }, data });
-            return c.json({ code: 0, data: book });
+            return ResponseUtil.success(c, book);
         } catch (error: any) {
-            return c.json({ code: 1, message: error.message });
+            return ResponseUtil.error(c, error.message);
         }
     }
 
@@ -186,10 +182,10 @@ export class AdminController {
         const { id } = c.req.param();
         const files = await prisma.file.findMany({ where: { bookId: id } });
         if (files.length > 0) {
-            return c.json({ code: 1, message: '该书籍有关联的文件，请先删除文件或解除关联' });
+            return ResponseUtil.error(c, 'Book has files, please delete files or unbind');
         }
         await prisma.book.delete({ where: { id } });
-        return c.json({ code: 0, message: 'Book deleted' });
+        return ResponseUtil.success(c, 'Book deleted');
     }
 
     @Get('/file')
@@ -206,7 +202,7 @@ export class AdminController {
             take: pageSizeInt,
             include: { Book: { select: { id: true, title: true } } },
         });
-        return c.json({ code: 0, files, total, page: pageInt, pageSize: pageSizeInt });
+        return ResponseUtil.success(c, { files, total, page: pageInt, pageSize: pageSizeInt });
     }
 
     @Get('/file/:id')
@@ -220,9 +216,9 @@ export class AdminController {
             },
         });
         if (!file) {
-            return c.json({ code: 1, message: '文件不存在' });
+            return ResponseUtil.error(c, 'File not found');
         }
-        return c.json({ code: 0, data: file });
+        return ResponseUtil.success(c, file);
     }
 
     @Put('/file/:id')
@@ -238,9 +234,9 @@ export class AdminController {
                     desc,
                 },
             });
-            return c.json({ code: 0, data: file });
+            return ResponseUtil.success(c, file);
         } catch (error: any) {
-            return c.json({ code: 1, message: error.message });
+            return ResponseUtil.error(c, error.message);
         }
     }
 
@@ -250,9 +246,9 @@ export class AdminController {
         try {
             await prisma.fileChunk.deleteMany({ where: { fileId: id } });
             await prisma.file.delete({ where: { id } });
-            return c.json({ code: 0, message: 'File deleted' });
+            return ResponseUtil.success(c, 'File deleted');
         } catch (error: any) {
-            return c.json({ code: 1, message: error.message });
+            return ResponseUtil.error(c, error.message);
         }
     }
 
@@ -267,23 +263,20 @@ export class AdminController {
         });
 
         if (!book) {
-            return c.json({ code: 1, message: 'No books found' });
+            return ResponseUtil.error(c, 'No books found');
         }
 
-        return c.json({
-            code: 0,
-            data: {
-                ...book,
-                category: book.Category
-                    ? {
-                          id: book.Category.id,
-                          name: book.Category.name,
-                          path: book.Category.path,
-                          color: book.Category.color,
-                      }
-                    : null,
-                formats: book.File ? book.File.map((f: any) => f.format) : [],
-            },
+        return ResponseUtil.success(c, {
+            ...book,
+            category: book.Category
+                ? {
+                      id: book.Category.id,
+                      name: book.Category.name,
+                      path: book.Category.path,
+                      color: book.Category.color,
+                  }
+                : null,
+            formats: book.File ? book.File.map((f: any) => f.format) : [],
         });
     }
 }

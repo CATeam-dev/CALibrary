@@ -60,6 +60,14 @@ export class IndexController {
                 author: true,
                 cover: true,
                 description: true,
+                File: {
+                    select: {
+                        id: true,
+                        format: true,
+                        desc: true,
+                        size: true,
+                    },
+                },
             },
             orderBy: {
                 updatedAt: 'desc',
@@ -91,7 +99,7 @@ export class IndexController {
                     select: {
                         id: true,
                         format: true,
-                        versionDesc: true,
+                        desc: true,
                         size: true,
                     },
                 },
