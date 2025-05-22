@@ -36,7 +36,7 @@ model Book {
     description String
     public      Boolean @default(false)
 
-    zlib String?
+    doubanId String? // 豆瓣ID，用于获取书籍信息
 
     categoryId String
 
