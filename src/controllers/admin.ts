@@ -1,9 +1,23 @@
 import type { Context } from 'hono';
 
+import { join } from 'path';
+import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'fs';
+import { pipeline } from 'stream/promises';
+
+import axios from 'axios';
+
 import { Controller } from '@/decorators/controller';
 import { Delete, Get, Post, Put } from '@/decorators/http';
 import { ResponseUtil } from '@/core/response';
 import { prisma } from '@/utils/db';
+
+const DOUBAN_API_KEY = '0ac44ae016490db2204ce0a042db2916';
+const COVERS_DIR = join(process.cwd(), 'uploads', 'covers');
+
+// 确保封面目录存在
+if (!existsSync(COVERS_DIR)) {
+    mkdirSync(COVERS_DIR, { recursive: true });
+}
 
 @Controller('/admin')
 export class AdminController {
@@ -22,7 +36,7 @@ export class AdminController {
 
         // 手动获取每个分类的书籍数量
         const categoriesWithBookCount = await Promise.all(
-            categories.map(async (category) => {
+            categories.map(async (category: any) => {
                 const bookCount = await prisma.book.count({
                     where: { categoryId: category.id },
                 });
@@ -110,7 +124,7 @@ export class AdminController {
             include: { Category: true, File: true },
         });
         return ResponseUtil.success(c, {
-            books: books.map((b) => ({
+            books: books.map((b: any) => ({
                 ...b,
                 category: b.Category
                     ? {
@@ -147,9 +161,26 @@ export class AdminController {
 
     @Post('/book')
     async createBook(c: Context) {
-        const { title, author, cover, categoryId, description, zlib } = await c.req.json();
+        const { title, author, cover, categoryId, description, doubanId } = await c.req.json();
+
+        // 如果是豆瓣图片链接，先下载到本地
+        let localCover = cover;
+        if (cover?.includes('/api/admin/proxy/douban-image')) {
+            const originalUrl = new URL(cover).searchParams.get('url');
+            if (originalUrl) {
+                localCover = await this.downloadAndSaveImage(originalUrl);
+            }
+        }
+
         const book = await prisma.book.create({
-            data: { title, author, cover, categoryId, description, zlib },
+            data: {
+                title,
+                author,
+                cover: localCover,
+                categoryId,
+                description,
+                doubanId,
+            },
         });
         return ResponseUtil.success(c, book);
     }
@@ -158,6 +189,14 @@ export class AdminController {
     async updateBook(c: Context) {
         const { id } = c.req.param();
         const data = await c.req.json();
+
+        // 如果是豆瓣图片链接，先下载到本地
+        if (data.cover?.includes('/api/admin/proxy/douban-image')) {
+            const originalUrl = new URL(data.cover).searchParams.get('url');
+            if (originalUrl) {
+                data.cover = await this.downloadAndSaveImage(originalUrl);
+            }
+        }
 
         if (data.public) {
             // check format exists
@@ -225,7 +264,39 @@ export class AdminController {
     async updateFile(c: Context) {
         const { id } = c.req.param();
         const { bookId, desc } = await c.req.json();
-        console.log(await c.req.json(), bookId);
+
+        // 如果是解绑操作（bookId从有值变为null）
+        if (bookId === null) {
+            // 先查询当前文件
+            const currentFile = await prisma.file.findUnique({
+                where: { id },
+                include: { Book: true },
+            });
+
+            // 如果文件存在且当前有关联的书籍
+            if (currentFile && currentFile.bookId) {
+                // 检查书籍是否为public
+                const book = await prisma.book.findUnique({
+                    where: { id: currentFile.bookId },
+                });
+
+                if (book && book.public) {
+                    // 检查这本书关联的文件数量
+                    const fileCount = await prisma.file.count({
+                        where: { bookId: currentFile.bookId },
+                    });
+
+                    // 如果这是最后一个文件，阻止解绑
+                    if (fileCount <= 1) {
+                        return ResponseUtil.error(
+                            c,
+                            'Cannot unbind the last file from a public book. Please unpublish the book first.'
+                        );
+                    }
+                }
+            }
+        }
+
         try {
             const file = await prisma.file.update({
                 where: { id },
@@ -278,5 +349,172 @@ export class AdminController {
                 : null,
             formats: book.File ? book.File.map((f: any) => f.format) : [],
         });
+    }
+
+    // 下载并保存豆瓣图片（仅在保存图书时使用）
+    private async downloadAndSaveImage(imageUrl: string): Promise<string> {
+        try {
+            // 验证URL
+            const url = new URL(imageUrl);
+            if (!url.hostname.includes('douban')) {
+                throw new Error('Only Douban images are allowed');
+            }
+
+            const response = await axios.get(imageUrl, {
+                responseType: 'stream',
+                timeout: 5000,
+                maxContentLength: 5 * 1024 * 1024, // 5MB
+            });
+
+            // 验证内容类型
+            const contentType = response.headers['content-type'];
+            if (!contentType?.startsWith('image/')) {
+                throw new Error('Invalid content type');
+            }
+
+            const filename = `${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
+            const localPath = join(COVERS_DIR, filename);
+
+            await pipeline(response.data, createWriteStream(localPath));
+
+            return `/api/admin/covers/${filename}`;
+        } catch (error) {
+            console.error('Failed to download image:', error);
+            // 返回原始URL作为备选
+            return imageUrl;
+        }
+    }
+
+    @Get('/covers/:filename')
+    async getCoverImage(c: Context) {
+        const filename = c.req.param('filename');
+        if (!filename) {
+            return ResponseUtil.error(c, 'Filename is required', 400);
+        }
+
+        const filepath = join(COVERS_DIR, filename);
+
+        if (!existsSync(filepath)) {
+            return ResponseUtil.error(c, 'Image not found', 404);
+        }
+
+        const file = readFileSync(filepath);
+        return new Response(file, {
+            headers: {
+                'Content-Type': 'image/jpeg',
+                'Cache-Control': 'public, max-age=31536000',
+            },
+        });
+    }
+
+    @Get('/douban/search')
+    async searchDoubanBooks(c: Context) {
+        const { query, count = '20' } = c.req.query();
+
+        if (!query) {
+            return ResponseUtil.error(c, 'Search query is required');
+        }
+
+        try {
+            const url = `https://api.douban.com/v2/book/search?apikey=${DOUBAN_API_KEY}&q=${encodeURIComponent(query)}&count=${count}`;
+            const response = await axios.get(url);
+
+            // 修改图片URL为代理URL
+            const books = response.data.books.map((book: any) => ({
+                ...book,
+                image: book.image
+                    ? `/api/admin/proxy/douban-image?url=${encodeURIComponent(book.image)}`
+                    : null,
+            }));
+
+            return ResponseUtil.success(c, { books });
+        } catch (error: any) {
+            return ResponseUtil.error(c, error.message || 'Failed to search Douban books');
+        }
+    }
+
+    @Get('/douban/book/:id')
+    async getDoubanBook(c: Context) {
+        const { id } = c.req.param();
+
+        try {
+            const url = `https://api.douban.com/v2/book/${id}?apikey=${DOUBAN_API_KEY}`;
+            const response = await axios.get(url);
+
+            // 处理封面图片
+            if (response.data.image) {
+                response.data.image = await this.downloadAndSaveImage(response.data.image);
+            }
+
+            return ResponseUtil.success(c, response.data);
+        } catch (error: any) {
+            return ResponseUtil.error(c, error.message || 'Failed to get Douban book');
+        }
+    }
+
+    @Get('/douban/download-image')
+    async downloadDoubanImage(c: Context) {
+        const imageUrl = c.req.query('url');
+        if (!imageUrl) {
+            return ResponseUtil.error(c, 'Image URL is required', 400);
+        }
+
+        try {
+            // 验证URL
+            const url = new URL(imageUrl);
+            if (!url.hostname.includes('douban')) {
+                return ResponseUtil.error(c, 'Only Douban images are allowed', 400);
+            }
+
+            const localUrl = await this.downloadAndSaveImage(imageUrl);
+
+            // 如果返回的URL与输入相同，说明下载失败
+            if (localUrl === imageUrl) {
+                return ResponseUtil.error(c, 'Failed to download image', 500);
+            }
+
+            return ResponseUtil.success(c, { url: localUrl });
+        } catch (error) {
+            console.error('Error downloading image:', error);
+            return ResponseUtil.error(c, 'Invalid image URL', 400);
+        }
+    }
+
+    @Get('/proxy/douban-image')
+    async proxyDoubanImage(c: Context) {
+        const imageUrl = c.req.query('url');
+        if (!imageUrl) {
+            return ResponseUtil.error(c, 'Image URL is required', 400);
+        }
+
+        try {
+            // 验证URL
+            const url = new URL(imageUrl);
+            if (!url.hostname.includes('douban')) {
+                return ResponseUtil.error(c, 'Only Douban images are allowed', 400);
+            }
+
+            const response = await axios.get(imageUrl, {
+                responseType: 'arraybuffer',
+                timeout: 5000,
+                maxContentLength: 5 * 1024 * 1024, // 5MB
+            });
+
+            // 验证内容类型
+            const contentType = response.headers['content-type'];
+            if (!contentType?.startsWith('image/')) {
+                return ResponseUtil.error(c, 'Invalid content type', 400);
+            }
+
+            return new Response(response.data, {
+                headers: {
+                    'Content-Type': contentType,
+                    'Cache-Control': 'public, max-age=3600',
+                },
+            });
+        } catch (error) {
+            console.error('Failed to proxy image:', error);
+            return ResponseUtil.error(c, 'Failed to proxy image', 500);
+        }
     }
 }
