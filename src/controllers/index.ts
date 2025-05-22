@@ -216,6 +216,7 @@ export class IndexController {
                     select: {
                         id: true,
                         chunk: true,
+                        size: true,
                         hash: true,
                     },
                 },
