@@ -28,7 +28,11 @@ export async function telegramAuthMiddleware(c: Context, next: Next) {
             }
 
             // 检查是否是 Telegram 认证的用户
-            if (payload.provider !== 'telegram') {
+            if (
+                !payload.provider ||
+                typeof payload.provider !== 'string' ||
+                !payload.provider.startsWith('telegram')
+            ) {
                 return ResponseUtil.error(c, 'Invalid authentication provider', 401);
             }
 
