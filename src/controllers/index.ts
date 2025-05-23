@@ -49,6 +49,9 @@ export class IndexController {
     @Get('/category/:path')
     async categoryBooks(c: Context) {
         const { path } = c.req.param();
+        const { page, pageSize } = c.req.query();
+        const pageNumber = parseInt(page || '1');
+        const pageSizeNumber = parseInt(pageSize || '20');
 
         const category = await prisma.category.findUnique({
             where: { path },
@@ -58,11 +61,16 @@ export class IndexController {
             return ResponseUtil.error(c, '分类不存在');
         }
 
+        const where = {
+            categoryId: category.id,
+            public: true,
+        };
+
+        // 获取总数
+        const total = await prisma.book.count({ where });
+
         const books = await prisma.book.findMany({
-            where: {
-                categoryId: category.id,
-                public: true,
-            },
+            where,
             select: {
                 id: true,
                 title: true,
@@ -78,6 +86,7 @@ export class IndexController {
                 },
                 Category: {
                     select: {
+                        id: true,
                         name: true,
                         path: true,
                         color: true,
@@ -87,9 +96,23 @@ export class IndexController {
             orderBy: {
                 updatedAt: 'desc',
             },
+            skip: (pageNumber - 1) * pageSizeNumber,
+            take: pageSizeNumber,
         });
 
-        return ResponseUtil.success(c, books);
+        return ResponseUtil.success(c, {
+            books,
+            total,
+            page: pageNumber,
+            pageSize: pageSizeNumber,
+            totalPages: Math.ceil(total / pageSizeNumber),
+            category: {
+                id: category.id,
+                name: category.name,
+                path: category.path,
+                color: category.color,
+            },
+        });
     }
 
     @Get('/book/:id')
@@ -132,9 +155,15 @@ export class IndexController {
     async books(c: Context) {
         const { page, pageSize } = c.req.query();
         const pageNumber = parseInt(page || '1');
-        const pageSizeNumber = parseInt(pageSize || '10');
+        const pageSizeNumber = parseInt(pageSize || '20');
+
+        const where = { public: true };
+
+        // 获取总数
+        const total = await prisma.book.count({ where });
+
         const books = await prisma.book.findMany({
-            where: { public: true },
+            where,
             select: {
                 id: true,
                 title: true,
@@ -143,6 +172,7 @@ export class IndexController {
                 description: true,
                 Category: {
                     select: {
+                        id: true,
                         path: true,
                         name: true,
                         color: true,
@@ -163,7 +193,13 @@ export class IndexController {
             take: pageSizeNumber,
         });
 
-        return ResponseUtil.success(c, books);
+        return ResponseUtil.success(c, {
+            books,
+            total,
+            page: pageNumber,
+            pageSize: pageSizeNumber,
+            totalPages: Math.ceil(total / pageSizeNumber),
+        });
     }
 
     @Get('/books/random')

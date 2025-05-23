@@ -146,6 +146,7 @@ export class AdminController {
             total,
             page: pageInt,
             pageSize: pageSizeInt,
+            totalPages: Math.ceil(total / pageSizeInt),
         });
     }
 
@@ -253,6 +254,7 @@ export class AdminController {
             total,
             page: pageInt,
             pageSize: pageSizeInt,
+            totalPages: Math.ceil(total / pageSizeInt),
         });
     }
 
