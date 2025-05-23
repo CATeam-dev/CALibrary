@@ -1,7 +1,8 @@
 import type { Context } from 'hono';
-import { verify } from 'hono/jwt';
+
 import * as crypto from 'crypto';
 
+import { verify } from 'hono/jwt';
 import { validate, parse } from '@telegram-apps/init-data-node';
 
 import { Controller } from '@/decorators/controller';
@@ -13,7 +14,7 @@ const BOT_TOKEN = process.env.BOT_TOKEN;
 const BOT_USERNAME = process.env.BOT_USERNAME;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 
-const ADMIN_USERS = ['codyee'];
+const ADMIN_USERS = ['codyee', 'ancker_0'];
 
 @Controller('/auth')
 export class AuthController {
@@ -209,6 +210,11 @@ export class AuthController {
                     !payload.provider.startsWith('telegram')
                 ) {
                     return ResponseUtil.error(c, 'Invalid authentication provider', 401);
+                }
+
+                // 只有当用户名存在时才进行管理员验证
+                if (payload.username && !ADMIN_USERS.includes(payload.username as string)) {
+                    return ResponseUtil.error(c, 'Access denied', 403);
                 }
 
                 return ResponseUtil.success(c, {

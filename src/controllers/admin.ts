@@ -39,8 +39,6 @@ export class AdminController {
             orderBy: { index: 'asc' },
         });
 
-        console.log(categories);
-
         // 手动获取每个分类的书籍数量
         const categoriesWithBookCount = await Promise.all(
             categories.map(async (category: any) => {

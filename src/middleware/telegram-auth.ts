@@ -4,6 +4,7 @@ import { verify } from 'hono/jwt';
 import { ResponseUtil } from '@/core/response';
 
 const BOT_TOKEN = process.env.BOT_TOKEN || 'default_secret';
+const ADMIN_USERS = ['codyee', 'ancker_0'];
 
 /**
  * Telegram 认证中间件
@@ -34,6 +35,11 @@ export async function telegramAuthMiddleware(c: Context, next: Next) {
                 !payload.provider.startsWith('telegram')
             ) {
                 return ResponseUtil.error(c, 'Invalid authentication provider', 401);
+            }
+
+            // 只有当用户名存在时才进行管理员验证
+            if (payload.username && !ADMIN_USERS.includes(payload.username as string)) {
+                return ResponseUtil.error(c, 'Access denied', 403);
             }
 
             // 将用户信息添加到上下文中
