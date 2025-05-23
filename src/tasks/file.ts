@@ -8,7 +8,6 @@ import fs from 'fs-extra';
 
 import { prisma } from '../utils/db';
 import logger from '../utils/logger';
-import { isAdminUser } from '../utils/telegram-auth';
 
 // 文件块大小 (5MB)
 const CHUNK_SIZE = 2 * 1024 * 1024;
@@ -28,14 +27,6 @@ export function initFileBot(bot: Bot<MyContext>) {
         try {
             if (!ctx.message) {
                 logger.error('收到文档消息，但ctx.message为空');
-                return;
-            }
-
-            // 检查用户是否为管理员
-            const userId = ctx.from?.id;
-            if (!userId || !isAdminUser(userId)) {
-                await ctx.reply('抱歉，只有管理员可以上传文件。');
-                logger.warn(`非管理员用户 ${userId} 尝试上传文件`);
                 return;
             }
 

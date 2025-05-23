@@ -44,9 +44,7 @@ const jwtMiddleware = jwt({
     cookie: 'jwt',
 });
 
-// 启用admin路由的JWT保护
-app.use('/admin/*', jwtMiddleware);
-app.use('/auth/me', jwtMiddleware);
+// app.use('/admin/*', jwtMiddleware);
 
 // 全局路由处理程序 - 放在静态文件中间件之前
 app.all('*', (c) => {

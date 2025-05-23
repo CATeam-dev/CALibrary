@@ -10,6 +10,7 @@ import { Controller } from '@/decorators/controller';
 import { Delete, Get, Post, Put } from '@/decorators/http';
 import { ResponseUtil } from '@/core/response';
 import { prisma } from '@/utils/db';
+import { telegramAuthMiddleware } from '@/middleware/telegram-auth';
 
 const DOUBAN_API_KEY = '0ac44ae016490db2204ce0a042db2916';
 const COVERS_DIR = join(process.cwd(), 'uploads', 'covers');
@@ -21,13 +22,17 @@ if (!existsSync(COVERS_DIR)) {
 
 @Controller('/admin')
 export class AdminController {
-    @Get('/me')
+    @Get('/me', telegramAuthMiddleware)
     async me(c: Context) {
-        // 通过JWT中间件，这里已经是认证过的管理员
-        return ResponseUtil.success(c, { role: 'admin' });
+        // 通过 Telegram 认证中间件，这里已经是认证过的管理员
+        const user = c.get('user');
+        return ResponseUtil.success(c, {
+            role: 'admin',
+            user: user,
+        });
     }
 
-    @Get('/category')
+    @Get('/category', telegramAuthMiddleware)
     async category(c: Context) {
         // 获取所有分类及其包含的书籍数量
         const categories = await prisma.category.findMany({
@@ -50,7 +55,7 @@ export class AdminController {
         return ResponseUtil.success(c, categoriesWithBookCount);
     }
 
-    @Get('/category/:path')
+    @Get('/category/:path', telegramAuthMiddleware)
     async getCategoryById(c: Context) {
         const { path } = c.req.param();
         const category = await prisma.category.findFirst({
@@ -72,14 +77,14 @@ export class AdminController {
         });
     }
 
-    @Post('/category')
+    @Post('/category', telegramAuthMiddleware)
     async createCategory(c: Context) {
         const { name, path, color } = await c.req.json();
         const category = await prisma.category.create({ data: { name, path, color } });
         return ResponseUtil.success(c, category);
     }
 
-    @Put('/category/:id')
+    @Put('/category/:id', telegramAuthMiddleware)
     async updateCategory(c: Context) {
         const { id } = c.req.param();
         const { name, path, color } = await c.req.json();
@@ -94,7 +99,7 @@ export class AdminController {
         }
     }
 
-    @Delete('/category/:id')
+    @Delete('/category/:id', telegramAuthMiddleware)
     async deleteCategory(c: Context) {
         const { id } = c.req.param();
         const category = await prisma.category.findUnique({ where: { id } });
@@ -109,7 +114,7 @@ export class AdminController {
         return ResponseUtil.success(c, 'Category deleted');
     }
 
-    @Get('/book')
+    @Get('/book', telegramAuthMiddleware)
     async book(c: Context) {
         let { categoryId, page, pageSize } = c.req.query();
         const pageInt = parseInt(page || '1') || 1;
@@ -142,7 +147,7 @@ export class AdminController {
         });
     }
 
-    @Get('/book/:id')
+    @Get('/book/:id', telegramAuthMiddleware)
     async bookDetail(c: Context) {
         const { id } = c.req.param();
         const book = await prisma.book.findUnique({
@@ -159,7 +164,7 @@ export class AdminController {
         });
     }
 
-    @Post('/book')
+    @Post('/book', telegramAuthMiddleware)
     async createBook(c: Context) {
         const { title, author, cover, categoryId, description, doubanId } = await c.req.json();
 
@@ -185,7 +190,7 @@ export class AdminController {
         return ResponseUtil.success(c, book);
     }
 
-    @Put('/book/:id')
+    @Put('/book/:id', telegramAuthMiddleware)
     async updateBook(c: Context) {
         const { id } = c.req.param();
         const data = await c.req.json();
@@ -216,7 +221,7 @@ export class AdminController {
         }
     }
 
-    @Delete('/book/:id')
+    @Delete('/book/:id', telegramAuthMiddleware)
     async deleteBook(c: Context) {
         const { id } = c.req.param();
         const files = await prisma.file.findMany({ where: { bookId: id } });
@@ -227,9 +232,9 @@ export class AdminController {
         return ResponseUtil.success(c, 'Book deleted');
     }
 
-    @Get('/file')
+    @Get('/file', telegramAuthMiddleware)
     async getFiles(c: Context) {
-        const { bookId, page, pageSize } = c.req.query();
+        let { bookId, page, pageSize } = c.req.query();
         const pageInt = parseInt(page || '1') || 1;
         const pageSizeInt = parseInt(pageSize || '10') || 10;
         const where = bookId ? { bookId } : {};
@@ -239,20 +244,22 @@ export class AdminController {
             orderBy: { createdAt: 'desc' },
             skip: (pageInt - 1) * pageSizeInt,
             take: pageSizeInt,
-            include: { Book: { select: { id: true, title: true } } },
+            include: { Book: true },
         });
-        return ResponseUtil.success(c, { files, total, page: pageInt, pageSize: pageSizeInt });
+        return ResponseUtil.success(c, {
+            files,
+            total,
+            page: pageInt,
+            pageSize: pageSizeInt,
+        });
     }
 
-    @Get('/file/:id')
+    @Get('/file/:id', telegramAuthMiddleware)
     async getFileDetail(c: Context) {
         const { id } = c.req.param();
         const file = await prisma.file.findUnique({
             where: { id },
-            include: {
-                Book: { select: { id: true, title: true } },
-                FileChunks: { orderBy: { chunk: 'asc' } },
-            },
+            include: { Book: true },
         });
         if (!file) {
             return ResponseUtil.error(c, 'File not found');
@@ -260,7 +267,7 @@ export class AdminController {
         return ResponseUtil.success(c, file);
     }
 
-    @Put('/file/:id')
+    @Put('/file/:id', telegramAuthMiddleware)
     async updateFile(c: Context) {
         const { id } = c.req.param();
         const { bookId, desc } = await c.req.json();
@@ -311,7 +318,7 @@ export class AdminController {
         }
     }
 
-    @Delete('/file/:id')
+    @Delete('/file/:id', telegramAuthMiddleware)
     async deleteFile(c: Context) {
         const { id } = c.req.param();
         try {
@@ -407,7 +414,7 @@ export class AdminController {
         });
     }
 
-    @Get('/douban/search')
+    @Get('/douban/search', telegramAuthMiddleware)
     async searchDoubanBooks(c: Context) {
         const { query, count = '20' } = c.req.query();
 
@@ -433,7 +440,7 @@ export class AdminController {
         }
     }
 
-    @Get('/douban/book/:id')
+    @Get('/douban/book/:id', telegramAuthMiddleware)
     async getDoubanBook(c: Context) {
         const { id } = c.req.param();
 
