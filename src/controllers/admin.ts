@@ -54,7 +54,7 @@ export class AdminController {
             })
         );
 
-        return ResponseUtil.success(c, { categories: categoriesWithBookCount });
+        return ResponseUtil.success(c, categoriesWithBookCount);
     }
 
     @Get('/category/:path', telegramAuthMiddleware)
