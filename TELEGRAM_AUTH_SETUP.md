@@ -80,12 +80,25 @@ FRONTEND_URL=http://localhost:3000
 - `TelegramAuthGuard` - 认证守卫组件
 - `TelegramWebLogin` - 浏览器登录组件
 
+### API 调用架构
+
+前端直接调用后端 API，不通过 Next.js API 路由代理：
+- 使用 `NEXT_PUBLIC_API_URL` 环境变量配置后端 API 地址
+- 所有认证相关的 API 调用都直接发送到后端
+- 支持跨域请求（需要后端配置 CORS）
+
 ### 认证数据验证
 
 两种认证方式都使用相同的验证机制：
 - Mini App: 使用 `@telegram-apps/init-data-node` 验证初始数据
 - Web OAuth: 使用 HMAC-SHA256 验证授权数据
 - 都使用 BOT_TOKEN 作为验证密钥
+
+### 管理员权限控制
+
+- 在后端维护 `ADMIN_USERS` 列表
+- 只有列表中的用户名可以访问管理功能
+- 如果用户没有用户名，仍可以认证但可能无法访问某些功能
 
 ## 调试和测试
 
