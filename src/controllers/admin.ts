@@ -80,38 +80,140 @@ export class AdminController {
     @Post('/category', telegramAuthMiddleware)
     async createCategory(c: Context) {
         const { name, path, color } = await c.req.json();
-        const category = await prisma.category.create({ data: { name, path, color } });
-        return ResponseUtil.success(c, category);
-    }
 
-    @Put('/category/:id', telegramAuthMiddleware)
-    async updateCategory(c: Context) {
-        const { id } = c.req.param();
-        const { name, path, color } = await c.req.json();
         try {
-            const category = await prisma.category.update({
-                where: { id },
-                data: { name, path, color },
+            // 检查path是否已存在
+            if (path) {
+                const existingCategory = await prisma.category.findFirst({
+                    where: { path },
+                });
+
+                if (existingCategory) {
+                    return ResponseUtil.error(c, 'Path already exists', 400);
+                }
+            }
+
+            // 获取当前最大的index值
+            const maxIndexCategory = await prisma.category.findFirst({
+                orderBy: { index: 'desc' },
+                select: { index: true },
             });
+
+            const nextIndex = (maxIndexCategory?.index ?? -1) + 1;
+
+            const category = await prisma.category.create({
+                data: {
+                    name,
+                    path,
+                    color,
+                    index: nextIndex,
+                },
+            });
+
             return ResponseUtil.success(c, category);
         } catch (error: any) {
-            return ResponseUtil.error(c, error.message);
+            console.error('Create category error:', error);
+            return ResponseUtil.error(c, error.message || 'Failed to create category');
         }
     }
 
-    @Delete('/category/:id', telegramAuthMiddleware)
+    @Put('/category/:path', telegramAuthMiddleware)
+    async updateCategory(c: Context) {
+        const { path } = c.req.param();
+        const { name, path: newPath, color } = await c.req.json();
+
+        try {
+            // 先检查分类是否存在
+            const existingCategory = await prisma.category.findFirst({
+                where: { path },
+            });
+
+            if (!existingCategory) {
+                return ResponseUtil.error(c, 'Category not found', 404);
+            }
+
+            // 如果更新path，检查新path是否已被其他分类使用
+            if (newPath && newPath !== existingCategory.path) {
+                const pathExists = await prisma.category.findFirst({
+                    where: {
+                        path: newPath,
+                        id: { not: existingCategory.id }, // 排除当前分类
+                    },
+                });
+
+                if (pathExists) {
+                    return ResponseUtil.error(c, 'Path already exists', 400);
+                }
+            }
+
+            const category = await prisma.category.update({
+                where: { id: existingCategory.id },
+                data: { name, path: newPath, color },
+            });
+
+            return ResponseUtil.success(c, category);
+        } catch (error: any) {
+            console.error('Update category error:', error);
+            return ResponseUtil.error(c, error.message || 'Failed to update category');
+        }
+    }
+
+    @Delete('/category/:path', telegramAuthMiddleware)
     async deleteCategory(c: Context) {
-        const { id } = c.req.param();
-        const category = await prisma.category.findUnique({ where: { id } });
+        const { path } = c.req.param();
+        const category = await prisma.category.findFirst({ where: { path } });
         if (!category) {
             return ResponseUtil.error(c, 'Category not found');
         }
-        const books = await prisma.book.findMany({ where: { categoryId: id } });
+        const books = await prisma.book.findMany({ where: { categoryId: category.id } });
         if (books.length > 0) {
             return ResponseUtil.error(c, 'Category has books');
         }
-        await prisma.category.delete({ where: { id } });
+        await prisma.category.delete({ where: { id: category.id } });
         return ResponseUtil.success(c, 'Category deleted');
+    }
+
+    @Put('/category/reorder', telegramAuthMiddleware)
+    async reorderCategories(c: Context) {
+        const { categoryIds } = await c.req.json();
+
+        if (!Array.isArray(categoryIds)) {
+            return ResponseUtil.error(c, 'categoryIds must be an array');
+        }
+
+        if (categoryIds.length === 0) {
+            return ResponseUtil.error(c, 'categoryIds array cannot be empty');
+        }
+
+        try {
+            // 先验证所有分类ID是否存在
+            const existingCategories = await prisma.category.findMany({
+                where: { id: { in: categoryIds } },
+                select: { id: true },
+            });
+
+            if (existingCategories.length !== categoryIds.length) {
+                const existingIds = existingCategories.map((c) => c.id);
+                const missingIds = categoryIds.filter((id) => !existingIds.includes(id));
+                return ResponseUtil.error(c, `Categories not found: ${missingIds.join(', ')}`, 404);
+            }
+
+            // 使用事务来确保数据一致性
+            await prisma.$transaction(async (tx: any) => {
+                // 更新每个分类的index
+                for (let i = 0; i < categoryIds.length; i++) {
+                    await tx.category.update({
+                        where: { id: categoryIds[i] },
+                        data: { index: i },
+                    });
+                }
+            });
+
+            return ResponseUtil.success(c, 'Categories reordered successfully');
+        } catch (error: any) {
+            console.error('Reorder categories error:', error);
+            return ResponseUtil.error(c, error.message || 'Failed to reorder categories');
+        }
     }
 
     @Get('/book', telegramAuthMiddleware)
