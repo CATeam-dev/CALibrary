@@ -309,4 +309,22 @@ export class IndexController {
             return ResponseUtil.error(c, '读取文件块失败');
         }
     }
+
+    @Get('/covers/:filename')
+    async covers(c: Context) {
+        const { filename } = await c.req.param();
+
+        if (!filename) {
+            return ResponseUtil.error(c, 'Filename is required');
+        }
+
+        const filepath = path.join(process.env.STORAGE_PATH || '', 'covers', filename + '.jpg');
+        const file = await Bun.file(filepath).arrayBuffer();
+
+        return new Response(file, {
+            headers: {
+                'Content-Type': 'image/jpeg',
+            },
+        });
+    }
 }

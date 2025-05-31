@@ -1,19 +1,25 @@
 import type { Context } from 'hono';
 
 import { join } from 'path';
-import { createWriteStream, existsSync, mkdirSync, readFileSync } from 'fs';
+import { createWriteStream, existsSync, mkdirSync, statSync } from 'fs';
 import { pipeline } from 'stream/promises';
+import { createHash } from 'crypto';
 
 import axios from 'axios';
+import { z } from 'zod';
+import { FileFormat } from '@prisma/client';
 
 import { Controller } from '@/decorators/controller';
 import { Delete, Get, Post, Put } from '@/decorators/http';
 import { ResponseUtil } from '@/core/response';
 import { prisma } from '@/utils/db';
-import { telegramAuthMiddleware } from '@/middleware/telegram-auth';
+import { authMiddleware } from '@/middleware/auth';
+import { PrismaClientKnownRequestError } from '@prisma/client/runtime/library';
+import { validator } from 'hono/validator';
 
 const DOUBAN_API_KEY = '0ac44ae016490db2204ce0a042db2916';
-const COVERS_DIR = join(process.cwd(), 'uploads', 'covers');
+const STORAGE_PATH = process.env.STORAGE_PATH || join(process.cwd(), 'uploads');
+const COVERS_DIR = join(STORAGE_PATH, 'covers');
 
 // 确保封面目录存在
 if (!existsSync(COVERS_DIR)) {
@@ -22,7 +28,7 @@ if (!existsSync(COVERS_DIR)) {
 
 @Controller('/admin')
 export class AdminController {
-    @Get('/me', telegramAuthMiddleware)
+    @Get('/me', authMiddleware)
     async me(c: Context) {
         // 通过 Telegram 认证中间件，这里已经是认证过的管理员
         const user = c.get('user');
@@ -32,7 +38,7 @@ export class AdminController {
         });
     }
 
-    @Get('/category', telegramAuthMiddleware)
+    @Get('/category', authMiddleware)
     async category(c: Context) {
         // 获取所有分类及其包含的书籍数量
         const categories = await prisma.category.findMany({
@@ -55,7 +61,7 @@ export class AdminController {
         return ResponseUtil.success(c, categoriesWithBookCount);
     }
 
-    @Get('/category/:path', telegramAuthMiddleware)
+    @Get('/category/:path', authMiddleware)
     async getCategoryById(c: Context) {
         const { path } = c.req.param();
         const category = await prisma.category.findFirst({
@@ -77,15 +83,45 @@ export class AdminController {
         });
     }
 
-    @Post('/category', telegramAuthMiddleware)
+    @Post(
+        '/category',
+        authMiddleware,
+        validator('json', (value, c) => {
+            const categorySchema = z.object({
+                name: z.string().min(1),
+                path: z
+                    .string()
+                    .min(1)
+                    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
+                        message:
+                            'Path can only contain lowercase letters, numbers, and hyphens, and cannot start or end with a hyphen.',
+                    }),
+                color: z
+                    .string()
+                    .startsWith('#')
+                    .length(7)
+                    .regex(/^#[0-9a-fA-F]{6}$/, { message: 'Invalid hex color format.' }),
+                index: z.number().int().optional(),
+            });
+            const parsed = categorySchema.safeParse(value);
+            if (!parsed.success) {
+                // Return a Hono JSON response directly for errors
+                return c.json(
+                    { error: 'Invalid input', issues: parsed.error.flatten().fieldErrors },
+                    400
+                );
+            }
+            return parsed.data;
+        })
+    )
     async createCategory(c: Context) {
-        const { name, path, color } = await c.req.json();
+        const data = c.req.valid('json');
 
         try {
             // 检查path是否已存在
-            if (path) {
+            if (data.path) {
                 const existingCategory = await prisma.category.findFirst({
-                    where: { path },
+                    where: { path: data.path },
                 });
 
                 if (existingCategory) {
@@ -103,9 +139,9 @@ export class AdminController {
 
             const category = await prisma.category.create({
                 data: {
-                    name,
-                    path,
-                    color,
+                    name: data.name,
+                    path: data.path,
+                    color: data.color,
                     index: nextIndex,
                 },
             });
@@ -117,15 +153,46 @@ export class AdminController {
         }
     }
 
-    @Put('/category/:path', telegramAuthMiddleware)
+    @Put(
+        '/category/:path',
+        authMiddleware,
+        validator('json', (value, c) => {
+            const categoryUpdateSchema = z.object({
+                name: z.string().min(1).optional(),
+                path: z
+                    .string()
+                    .min(1)
+                    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/, {
+                        message:
+                            'Path can only contain lowercase letters, numbers, and hyphens, and cannot start or end with a hyphen.',
+                    })
+                    .optional(),
+                color: z
+                    .string()
+                    .startsWith('#')
+                    .length(7)
+                    .regex(/^#[0-9a-fA-F]{6}$/, { message: 'Invalid hex color format.' })
+                    .optional(),
+                index: z.number().int().optional(),
+            });
+            const parsed = categoryUpdateSchema.safeParse(value);
+            if (!parsed.success) {
+                return c.json(
+                    { error: 'Invalid input', issues: parsed.error.flatten().fieldErrors },
+                    400
+                );
+            }
+            return parsed.data;
+        })
+    )
     async updateCategory(c: Context) {
-        const { path } = c.req.param();
-        const { name, path: newPath, color } = await c.req.json();
+        const currentPath = c.req.param('path');
+        const data = c.req.valid('json');
 
         try {
             // 先检查分类是否存在
             const existingCategory = await prisma.category.findFirst({
-                where: { path },
+                where: { path: currentPath },
             });
 
             if (!existingCategory) {
@@ -133,10 +200,10 @@ export class AdminController {
             }
 
             // 如果更新path，检查新path是否已被其他分类使用
-            if (newPath && newPath !== existingCategory.path) {
+            if (data.path && data.path !== existingCategory.path) {
                 const pathExists = await prisma.category.findFirst({
                     where: {
-                        path: newPath,
+                        path: data.path,
                         id: { not: existingCategory.id }, // 排除当前分类
                     },
                 });
@@ -148,7 +215,12 @@ export class AdminController {
 
             const category = await prisma.category.update({
                 where: { id: existingCategory.id },
-                data: { name, path: newPath, color },
+                data: {
+                    name: data.name,
+                    path: data.path,
+                    color: data.color,
+                    index: data.index,
+                },
             });
 
             return ResponseUtil.success(c, category);
@@ -158,7 +230,7 @@ export class AdminController {
         }
     }
 
-    @Delete('/category/:path', telegramAuthMiddleware)
+    @Delete('/category/:path', authMiddleware)
     async deleteCategory(c: Context) {
         const { path } = c.req.param();
         const category = await prisma.category.findFirst({ where: { path } });
@@ -173,37 +245,60 @@ export class AdminController {
         return ResponseUtil.success(c, 'Category deleted');
     }
 
-    @Put('/category/reorder', telegramAuthMiddleware)
+    @Put(
+        '/category/reorder',
+        authMiddleware,
+        validator('json', (value, c) => {
+            const reorderSchema = z
+                .array(
+                    z.object({
+                        id: z.string().cuid(),
+                        index: z.number().int().min(0),
+                    })
+                )
+                .min(1);
+            const parsed = reorderSchema.safeParse(value);
+            if (!parsed.success) {
+                return c.json(
+                    { error: 'Invalid input', issues: parsed.error.flatten().fieldErrors },
+                    400
+                );
+            }
+            return parsed.data;
+        })
+    )
     async reorderCategories(c: Context) {
-        const { categoryIds } = await c.req.json();
+        const categoriesToReorder = c.req.valid('json');
 
-        if (!Array.isArray(categoryIds)) {
-            return ResponseUtil.error(c, 'categoryIds must be an array');
+        if (!Array.isArray(categoriesToReorder)) {
+            return ResponseUtil.error(c, 'categoriesToReorder must be an array');
         }
 
-        if (categoryIds.length === 0) {
-            return ResponseUtil.error(c, 'categoryIds array cannot be empty');
+        if (categoriesToReorder.length === 0) {
+            return ResponseUtil.error(c, 'categoriesToReorder array cannot be empty');
         }
 
         try {
             // 先验证所有分类ID是否存在
             const existingCategories = await prisma.category.findMany({
-                where: { id: { in: categoryIds } },
+                where: { id: { in: categoriesToReorder.map((c) => c.id) } },
                 select: { id: true },
             });
 
-            if (existingCategories.length !== categoryIds.length) {
+            if (existingCategories.length !== categoriesToReorder.length) {
                 const existingIds = existingCategories.map((c) => c.id);
-                const missingIds = categoryIds.filter((id) => !existingIds.includes(id));
+                const missingIds = categoriesToReorder
+                    .filter((c) => !existingIds.includes(c.id))
+                    .map((c) => c.id);
                 return ResponseUtil.error(c, `Categories not found: ${missingIds.join(', ')}`, 404);
             }
 
             // 使用事务来确保数据一致性
             await prisma.$transaction(async (tx: any) => {
                 // 更新每个分类的index
-                for (let i = 0; i < categoryIds.length; i++) {
+                for (let i = 0; i < categoriesToReorder.length; i++) {
                     await tx.category.update({
-                        where: { id: categoryIds[i] },
+                        where: { id: categoriesToReorder[i].id },
                         data: { index: i },
                     });
                 }
@@ -216,7 +311,7 @@ export class AdminController {
         }
     }
 
-    @Get('/book', telegramAuthMiddleware)
+    @Get('/book', authMiddleware)
     async book(c: Context) {
         let { categoryId, page, pageSize } = c.req.query();
         const pageInt = parseInt(page || '1') || 1;
@@ -250,7 +345,7 @@ export class AdminController {
         });
     }
 
-    @Get('/book/:id', telegramAuthMiddleware)
+    @Get('/book/:id', authMiddleware)
     async bookDetail(c: Context) {
         const { id } = c.req.param();
         const book = await prisma.book.findUnique({
@@ -267,52 +362,95 @@ export class AdminController {
         });
     }
 
-    @Post('/book', telegramAuthMiddleware)
+    @Post(
+        '/book',
+        authMiddleware,
+        validator('json', (value, c) => {
+            const bookSchema = z.object({
+                title: z.string().min(1),
+                author: z.string().min(1),
+                description: z.string().optional().default(''),
+                public: z.boolean().optional().default(false),
+                categoryId: z.string().cuid(),
+                cover: z
+                    .string()
+                    .url({ message: 'Invalid URL for cover image' })
+                    .optional()
+                    .nullable(),
+                doubanId: z.string().optional().nullable(),
+            });
+            const parsed = bookSchema.safeParse(value);
+            if (!parsed.success) {
+                return c.json(
+                    { error: 'Invalid input', issues: parsed.error.flatten().fieldErrors },
+                    400
+                );
+            }
+            return parsed.data;
+        })
+    )
     async createBook(c: Context) {
-        const { title, author, cover, categoryId, description, doubanId } = await c.req.json();
+        const data = c.req.valid('json');
 
         // 如果是豆瓣图片链接，先下载到本地
-        let localCover = cover;
-        if (cover?.includes('/api/admin/proxy/douban-image')) {
-            const originalUrl = new URL(cover).searchParams.get('url');
-            if (originalUrl) {
-                localCover = await this.downloadAndSaveImage(originalUrl);
+        let localCover = data.cover;
+        if (data.cover?.includes('/api/admin/proxy/douban-image')) {
+            const originalUrl = new URL(data.cover).searchParams.get('url');
+            if (originalUrl && data.doubanId) {
+                localCover = await this.downloadAndSaveImage(originalUrl, data.doubanId);
             }
         }
 
         const book = await prisma.book.create({
             data: {
-                title,
-                author,
+                title: data.title,
+                author: data.author,
                 cover: localCover,
-                categoryId,
-                description,
-                doubanId,
+                categoryId: data.categoryId,
+                description: data.description,
+                doubanId: data.doubanId,
+                public: data.public,
             },
         });
         return ResponseUtil.success(c, book);
     }
 
-    @Put('/book/:id', telegramAuthMiddleware)
+    @Put(
+        '/book/:id',
+        authMiddleware,
+        validator('json', (value, c) => {
+            const bookUpdateSchema = z.object({
+                title: z.string().min(1).optional(),
+                author: z.string().min(1).optional(),
+                description: z.string().optional(),
+                public: z.boolean().optional(),
+                categoryId: z.string().cuid().optional(),
+                cover: z
+                    .string()
+                    .url({ message: 'Invalid URL for cover image' })
+                    .optional()
+                    .nullable(),
+                doubanId: z.string().optional().nullable(),
+            });
+            const parsed = bookUpdateSchema.safeParse(value);
+            if (!parsed.success) {
+                return c.json(
+                    { error: 'Invalid input', issues: parsed.error.flatten().fieldErrors },
+                    400
+                );
+            }
+            return parsed.data;
+        })
+    )
     async updateBook(c: Context) {
-        const { id } = c.req.param();
-        const data = await c.req.json();
+        const id = c.req.param('id');
+        const data = c.req.valid('json');
 
         // 如果是豆瓣图片链接，先下载到本地
         if (data.cover?.includes('/api/admin/proxy/douban-image')) {
             const originalUrl = new URL(data.cover).searchParams.get('url');
-            if (originalUrl) {
-                data.cover = await this.downloadAndSaveImage(originalUrl);
-            }
-        }
-
-        if (data.public) {
-            // check format exists
-            const file = await prisma.file.findFirst({
-                where: { bookId: id },
-            });
-            if (!file) {
-                return ResponseUtil.error(c, 'Book has no format');
+            if (originalUrl && data.doubanId) {
+                data.cover = await this.downloadAndSaveImage(originalUrl, data.doubanId);
             }
         }
 
@@ -324,7 +462,7 @@ export class AdminController {
         }
     }
 
-    @Delete('/book/:id', telegramAuthMiddleware)
+    @Delete('/book/:id', authMiddleware)
     async deleteBook(c: Context) {
         const { id } = c.req.param();
         const files = await prisma.file.findMany({ where: { bookId: id } });
@@ -335,7 +473,7 @@ export class AdminController {
         return ResponseUtil.success(c, 'Book deleted');
     }
 
-    @Get('/file', telegramAuthMiddleware)
+    @Get('/file', authMiddleware)
     async getFiles(c: Context) {
         let { bookId, page, pageSize } = c.req.query();
         const pageInt = parseInt(page || '1') || 1;
@@ -358,7 +496,7 @@ export class AdminController {
         });
     }
 
-    @Get('/file/:id', telegramAuthMiddleware)
+    @Get('/file/:id', authMiddleware)
     async getFileDetail(c: Context) {
         const { id } = c.req.param();
         const file = await prisma.file.findUnique({
@@ -371,16 +509,35 @@ export class AdminController {
         return ResponseUtil.success(c, file);
     }
 
-    @Put('/file/:id', telegramAuthMiddleware)
-    async updateFile(c: Context) {
-        const { id } = c.req.param();
-        const { bookId, desc } = await c.req.json();
+    @Put(
+        '/file/:id',
+        authMiddleware,
+        validator('json', (value, c) => {
+            const fileUpdateSchema = z.object({
+                format: z.nativeEnum(FileFormat).optional(),
+                desc: z.string().optional().nullable(),
+                bookId: z.string().cuid().optional().nullable(),
+                filename: z.string().min(1).optional(),
+            });
+            const parsed = fileUpdateSchema.safeParse(value);
+            if (!parsed.success) {
+                return c.json(
+                    { error: 'Invalid input', issues: parsed.error.flatten().fieldErrors },
+                    400
+                );
+            }
+            return parsed.data;
+        })
+    )
+    async updateFileMeta(c: Context) {
+        const fileId = c.req.param('id');
+        const data = c.req.valid('json');
 
         // 如果是解绑操作（bookId从有值变为null）
-        if (bookId === null) {
+        if (data.bookId === null) {
             // 先查询当前文件
             const currentFile = await prisma.file.findUnique({
-                where: { id },
+                where: { id: fileId },
                 include: { Book: true },
             });
 
@@ -410,10 +567,10 @@ export class AdminController {
 
         try {
             const file = await prisma.file.update({
-                where: { id },
+                where: { id: fileId },
                 data: {
-                    bookId,
-                    desc,
+                    bookId: data.bookId,
+                    desc: data.desc,
                 },
             });
             return ResponseUtil.success(c, file);
@@ -422,7 +579,7 @@ export class AdminController {
         }
     }
 
-    @Delete('/file/:id', telegramAuthMiddleware)
+    @Delete('/file/:id', authMiddleware)
     async deleteFile(c: Context) {
         const { id } = c.req.param();
         try {
@@ -462,13 +619,23 @@ export class AdminController {
         });
     }
 
-    // 下载并保存豆瓣图片（仅在保存图书时使用）
-    private async downloadAndSaveImage(imageUrl: string): Promise<string> {
+    // 下载并保存豆瓣图片
+    private async downloadAndSaveImage(imageUrl: string, doubanId: string): Promise<string> {
         try {
             // 验证URL
             const url = new URL(imageUrl);
             if (!url.hostname.includes('douban')) {
                 throw new Error('Only Douban images are allowed');
+            }
+
+            // 使用豆瓣ID生成MD5
+            const hash = createHash('md5').update(doubanId).digest('hex');
+            const filename = `${hash.substring(0, 8)}`;
+            const localPath = join(COVERS_DIR, filename);
+
+            // 如果文件已存在，直接返回 API 路径
+            if (existsSync(localPath)) {
+                return `/api/covers/${filename}`; // 返回 API 相对路径
             }
 
             const response = await axios.get(imageUrl, {
@@ -483,12 +650,9 @@ export class AdminController {
                 throw new Error('Invalid content type');
             }
 
-            const filename = `${Date.now()}-${Math.random().toString(36).substring(7)}.jpg`;
-            const localPath = join(COVERS_DIR, filename);
-
             await pipeline(response.data, createWriteStream(localPath));
 
-            return `/api/admin/covers/${filename}`;
+            return `/api/covers/${filename}`; // 返回 API 相对路径
         } catch (error) {
             console.error('Failed to download image:', error);
             // 返回原始URL作为备选
@@ -496,29 +660,7 @@ export class AdminController {
         }
     }
 
-    @Get('/covers/:filename')
-    async getCoverImage(c: Context) {
-        const filename = c.req.param('filename');
-        if (!filename) {
-            return ResponseUtil.error(c, 'Filename is required', 400);
-        }
-
-        const filepath = join(COVERS_DIR, filename);
-
-        if (!existsSync(filepath)) {
-            return ResponseUtil.error(c, 'Image not found', 404);
-        }
-
-        const file = readFileSync(filepath);
-        return new Response(file, {
-            headers: {
-                'Content-Type': 'image/jpeg',
-                'Cache-Control': 'public, max-age=31536000',
-            },
-        });
-    }
-
-    @Get('/douban/search', telegramAuthMiddleware)
+    @Get('/douban/search', authMiddleware)
     async searchDoubanBooks(c: Context) {
         const { query, count = '20' } = c.req.query();
 
@@ -544,9 +686,12 @@ export class AdminController {
         }
     }
 
-    @Get('/douban/book/:id', telegramAuthMiddleware)
+    @Get('/douban/book/:id', authMiddleware)
     async getDoubanBook(c: Context) {
         const { id } = c.req.param();
+        if (!id) {
+            return ResponseUtil.error(c, 'Book ID is required', 400);
+        }
 
         try {
             const url = `https://api.douban.com/v2/book/${id}?apikey=${DOUBAN_API_KEY}`;
@@ -554,7 +699,7 @@ export class AdminController {
 
             // 处理封面图片
             if (response.data.image) {
-                response.data.image = await this.downloadAndSaveImage(response.data.image);
+                response.data.image = await this.downloadAndSaveImage(response.data.image, id);
             }
 
             return ResponseUtil.success(c, response.data);
@@ -566,8 +711,10 @@ export class AdminController {
     @Get('/douban/download-image')
     async downloadDoubanImage(c: Context) {
         const imageUrl = c.req.query('url');
-        if (!imageUrl) {
-            return ResponseUtil.error(c, 'Image URL is required', 400);
+        const doubanId = c.req.query('doubanId');
+
+        if (!imageUrl || !doubanId) {
+            return ResponseUtil.error(c, 'Image URL and Douban ID are required', 400);
         }
 
         try {
@@ -577,7 +724,7 @@ export class AdminController {
                 return ResponseUtil.error(c, 'Only Douban images are allowed', 400);
             }
 
-            const localUrl = await this.downloadAndSaveImage(imageUrl);
+            const localUrl = await this.downloadAndSaveImage(imageUrl, doubanId);
 
             // 如果返回的URL与输入相同，说明下载失败
             if (localUrl === imageUrl) {
@@ -626,6 +773,52 @@ export class AdminController {
         } catch (error) {
             console.error('Failed to proxy image:', error);
             return ResponseUtil.error(c, 'Failed to proxy image', 500);
+        }
+    }
+
+    // 新增路由，用于提供封面图片服务
+    @Get('/covers/:filename')
+    async serveCoverImage(c: Context) {
+        const { filename } = c.req.param();
+        if (!filename) {
+            return ResponseUtil.error(c, 'Filename not provided', 400);
+        }
+        const imagePath = join(COVERS_DIR, filename);
+
+        if (!existsSync(imagePath)) {
+            return ResponseUtil.error(c, 'Image not found', 404);
+        }
+
+        try {
+            const fileStream = Bun.file(imagePath);
+            const stats = statSync(imagePath);
+            let contentType = Bun.file(imagePath).type;
+
+            if (!contentType) {
+                const ext = filename.split('.').pop()?.toLowerCase();
+                if (ext === 'png') {
+                    contentType = 'image/png';
+                } else if (ext === 'gif') {
+                    contentType = 'image/gif';
+                } else {
+                    contentType = 'image/jpeg';
+                }
+            }
+
+            if (stats.size === 0) {
+                return ResponseUtil.error(c, 'Image not found or is empty', 404);
+            }
+
+            return new Response(fileStream, {
+                headers: {
+                    'Content-Type': contentType,
+                    'Content-Length': stats.size.toString(),
+                    'Cache-Control': 'public, max-age=604800',
+                },
+            });
+        } catch (error) {
+            console.error('Failed to serve image:', error);
+            return ResponseUtil.error(c, 'Failed to serve image', 500);
         }
     }
 }

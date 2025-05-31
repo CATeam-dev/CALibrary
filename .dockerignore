@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+
+# Node.js / Bun specific
+node_modules
+.bun/
+
+# Build artifacts (e.g., Next.js)
+frontend/.next
+
+# Environment files (should be passed as env vars to the container)
+.env
+.env.*
+!/.env.example
+
+# Docker specific files
+Dockerfile
+.dockerignore
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# IDE specific
+.vscode/
+.idea/
+
+# Husky hooks
+.husky/
+
+# Local development logs or temporary files
+*.log
+logs/
+temp/
+tmp/
+
+# Art directory (if not needed in the container image)
+art/
+
+# Prisma generated client (usually re-generated or not needed if pre-built)
+# generated/
+
+# Test files if not needed in production image
+# tests/
+# *.test.ts
+# *.spec.ts 

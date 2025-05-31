@@ -1,17 +1,24 @@
 import type { Context } from 'hono';
 
-import { verify } from 'hono/jwt';
-import { validate, parse } from '@telegram-apps/init-data-node';
-
-import { Controller } from '@/decorators/controller';
-import { Post } from '@/decorators/http';
-import { ResponseUtil } from '@/core/response';
-import { jwtCreate } from '@/utils/jwt';
 import crypto from 'crypto';
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
+import { verify } from 'hono/jwt';
+import { validate, parse } from '@telegram-apps/init-data-node';
+import { getCookie, setCookie, deleteCookie } from 'hono/cookie'; // 明确导入 cookie 处理函数
+import { HTTPException } from 'hono/http-exception';
 
-const ADMIN_USERS = ['codyee', 'Ancker_0'];
+import { Controller } from '@/decorators/controller';
+import { Post, Get } from '@/decorators/http';
+import { ResponseUtil } from '@/core/response';
+import { jwtCreate, jwtSecret } from '@/utils/jwt';
+
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
+const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
+const APP_URL = process.env.APP_URL || 'http://localhost:3000'; // 用于构建回调URL
+
+const TELEGRAM_ADMIN_USERS = (process.env.TELEGRAM_ADMIN_USERS || 'codyee,Ancker_0').split(',');
+const GITHUB_ADMIN_USERS = (process.env.GITHUB_ADMIN_USERS || '').split(',').filter((u) => u); // 从环境变量读取，默认为空
 
 @Controller('/auth')
 export class AuthController {
@@ -32,7 +39,7 @@ export class AuthController {
             // 验证 Telegram 初始数据
             try {
                 validate(initDataRaw, BOT_TOKEN);
-            } catch (error) {
+            } catch {
                 return ResponseUtil.error(c, 'Invalid Telegram data', 401);
             }
 
@@ -56,8 +63,13 @@ export class AuthController {
                 return ResponseUtil.error(c, 'User username not found', 401);
             }
 
-            if (!ADMIN_USERS.includes(user.username)) {
-                return ResponseUtil.error(c, 'Invalid username', 401);
+            if (!TELEGRAM_ADMIN_USERS.includes(user.username)) {
+                console.log(`Telegram login attempt by non-admin: ${user.username}`);
+                return ResponseUtil.error(
+                    c,
+                    'Access denied. User is not an authorized admin.',
+                    403
+                );
             }
 
             // 创建 JWT token
@@ -66,13 +78,21 @@ export class AuthController {
                 username: user.username,
                 name: user.name,
                 provider: 'telegram',
-                exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60, // 24小时过期
+                exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7天过期
+            });
+
+            // 设置HttpOnly和Secure的Cookie
+            setCookie(c, 'auth_token', token, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production', // 仅在生产环境中使用Secure
+                sameSite: 'Lax',
+                path: '/',
+                maxAge: 7 * 24 * 60 * 60, // Cookie过期时间与JWT一致
             });
 
             return ResponseUtil.success(c, {
-                token,
                 user,
-                expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+                expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
             });
         } catch (error) {
             console.error('Telegram auth error:', error);
@@ -130,8 +150,13 @@ export class AuthController {
             }
 
             // 检查用户名是否在管理员列表中
-            if (!username || !ADMIN_USERS.includes(username)) {
-                return ResponseUtil.error(c, 'Access denied', 403);
+            if (!username || !TELEGRAM_ADMIN_USERS.includes(username)) {
+                console.log(`Telegram widget login attempt by non-admin: ${username}`);
+                return ResponseUtil.error(
+                    c,
+                    'Access denied. User is not an authorized admin via widget.',
+                    403
+                );
             }
 
             const user = {
@@ -147,13 +172,21 @@ export class AuthController {
                 username,
                 name: user.name,
                 provider: 'telegram-widget',
-                exp: Math.floor(Date.now() / 1000) + 24 * 60 * 60, // 24小时过期
+                exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7天过期
+            });
+
+            // 设置HttpOnly和Secure的Cookie
+            setCookie(c, 'auth_token', token, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production', // 仅在生产环境中使用Secure
+                sameSite: 'Lax',
+                path: '/',
+                maxAge: 7 * 24 * 60 * 60, // Cookie过期时间与JWT一致
             });
 
             return ResponseUtil.success(c, {
-                token,
                 user,
-                expires: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+                expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
             });
         } catch (error) {
             console.error('Telegram widget auth error:', error);
@@ -161,54 +194,313 @@ export class AuthController {
         }
     }
 
+    @Get('/github/login-url')
+    async githubLoginUrl(c: Context) {
+        if (!GITHUB_CLIENT_ID) {
+            console.error('GitHub Client ID not configured');
+            return ResponseUtil.error(c, 'GitHub authentication is not configured.', 500);
+        }
+        const state = crypto.randomBytes(16).toString('hex');
+        // Store state in cookie to verify later
+        setCookie(c, 'github_oauth_state', state, {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: 'Lax',
+            path: '/',
+            maxAge: 600, // 10 minutes
+        });
+
+        const params = new URLSearchParams({
+            client_id: GITHUB_CLIENT_ID,
+            redirect_uri: `${APP_URL}/api/auth/github/callback`,
+            scope: 'read:user user:email', // Request user's public profile and primary email
+            state: state,
+        });
+        const loginUrl = `https://github.com/login/oauth/authorize?${params.toString()}`;
+        return ResponseUtil.success(c, { loginUrl });
+    }
+
+    @Get('/github/callback')
+    async githubCallback(c: Context) {
+        const query = c.req.query();
+        const code = query['code'];
+        const state = query['state'];
+        const storedState = getCookie(c, 'github_oauth_state');
+
+        deleteCookie(c, 'github_oauth_state', { path: '/' }); // Clean up state cookie
+
+        if (!code || !state || state !== storedState) {
+            console.error('GitHub callback error: state mismatch or missing code/state.', {
+                code,
+                state,
+                storedState,
+            });
+            return ResponseUtil.error(
+                c,
+                'Invalid GitHub callback: State mismatch or missing parameters.',
+                400
+            );
+        }
+
+        if (!GITHUB_CLIENT_ID || !GITHUB_CLIENT_SECRET) {
+            console.error('GitHub OAuth credentials not configured');
+            return ResponseUtil.error(
+                c,
+                'GitHub authentication is not properly configured on the server.',
+                500
+            );
+        }
+
+        try {
+            // Exchange code for access token
+            let tokenResponse = await fetch('https://github.com/login/oauth/access_token', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    Accept: 'application/json',
+                },
+                body: JSON.stringify({
+                    client_id: GITHUB_CLIENT_ID,
+                    client_secret: GITHUB_CLIENT_SECRET,
+                    code: code,
+                    redirect_uri: `${APP_URL}/api/auth/github/callback`,
+                }),
+            });
+
+            if (!tokenResponse.ok) {
+                const errorBody = await tokenResponse.text();
+                console.error('GitHub token exchange failed:', tokenResponse.status, errorBody);
+                throw new HTTPException(tokenResponse.status as any, {
+                    message: `GitHub token exchange failed: ${errorBody}`,
+                });
+            }
+            const tokenData = (await tokenResponse.json()) as {
+                access_token?: string;
+                error?: string;
+                error_description?: string;
+            };
+
+            if (tokenData.error || !tokenData.access_token) {
+                console.error('Error obtaining GitHub access token:', tokenData);
+                return ResponseUtil.error(
+                    c,
+                    tokenData.error_description || 'Failed to obtain GitHub access token.',
+                    400
+                );
+            }
+            const accessToken = tokenData.access_token;
+
+            // Fetch user information from GitHub
+            let userResponse = await fetch('https://api.github.com/user', {
+                headers: {
+                    Authorization: `token ${accessToken}`,
+                    Accept: 'application/vnd.github.v3+json',
+                },
+            });
+            if (!userResponse.ok) {
+                const errorBody = await userResponse.text();
+                console.error('GitHub user fetch failed:', userResponse.status, errorBody);
+                throw new HTTPException(userResponse.status as any, {
+                    message: `GitHub user fetch failed: ${errorBody}`,
+                });
+            }
+            const githubUser = (await userResponse.json()) as {
+                login: string;
+                id: number;
+                name?: string;
+                email?: string;
+                avatar_url?: string;
+            };
+
+            const githubUsername = githubUser.login;
+            if (!githubUsername) {
+                return ResponseUtil.error(c, 'Could not retrieve GitHub username.', 400);
+            }
+
+            // Check if the GitHub user is an admin
+            if (!GITHUB_ADMIN_USERS.includes(githubUsername)) {
+                console.log(`GitHub login attempt by non-admin: ${githubUsername}`);
+                return ResponseUtil.error(
+                    c,
+                    'Access denied. User is not an authorized GitHub admin.',
+                    403
+                );
+            }
+
+            const userPayload = {
+                provider_user_id: githubUser.id.toString(),
+                username: githubUsername,
+                name: githubUser.name || githubUsername,
+                email: githubUser.email, // May be null if not public
+                avatar_url: githubUser.avatar_url,
+                provider: 'github',
+            };
+
+            const jwtToken = await jwtCreate({
+                sub: githubUser.id.toString(),
+                ...userPayload,
+                exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7天过期
+            });
+
+            setCookie(c, 'auth_token', jwtToken, {
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'Lax',
+                path: '/',
+                maxAge: 7 * 24 * 60 * 60,
+            });
+
+            // Redirect to frontend admin page or a success page
+            // For SPA, it's often better to return user data and let frontend handle redirect.
+            // Here, we redirect to the admin dashboard as an example.
+            // return c.redirect('/admin', 302); // Or return user data
+            return ResponseUtil.success(c, {
+                user: userPayload,
+                expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+                // message: 'GitHub authentication successful. Redirecting...' // Optional message
+            });
+        } catch (error) {
+            console.error('GitHub callback processing error:', error);
+            if (error instanceof HTTPException) {
+                return ResponseUtil.error(c, error.message, error.status);
+            }
+            return ResponseUtil.error(
+                c,
+                'GitHub authentication failed during callback processing.',
+                500,
+                true,
+                error as Error
+            );
+        }
+    }
+
     @Post('/verify')
     async verifyToken(c: Context) {
         try {
-            const authHeader = c.req.header('Authorization');
-
-            if (!authHeader || !authHeader.startsWith('Bearer ')) {
-                return ResponseUtil.error(c, 'Authorization header required', 401);
+            const token = getCookie(c, 'auth_token');
+            if (!token) {
+                return ResponseUtil.error(c, 'No authentication token found in cookie.', 401);
             }
 
-            const token = authHeader.substring(7);
-
-            if (!BOT_TOKEN) {
-                return ResponseUtil.error(c, 'Bot token not configured', 500);
+            const secret = jwtSecret;
+            if (!secret) {
+                console.error('JWT secret is not configured.');
+                return ResponseUtil.error(
+                    c,
+                    'Server authentication mechanism is not configured.',
+                    500
+                );
             }
 
             try {
-                const payload = await verify(token, BOT_TOKEN);
+                const payload = (await verify(token, secret)) as any; // Cast to any for easier access
 
-                // 检查 token 是否过期
                 if (payload.exp && payload.exp < Math.floor(Date.now() / 1000)) {
-                    return ResponseUtil.error(c, 'Token expired', 401);
+                    deleteCookie(c, 'auth_token', { path: '/' });
+                    return ResponseUtil.error(c, 'Token expired.', 401);
                 }
 
-                // 检查是否是 Telegram 认证的用户
-                if (payload.provider !== 'telegram' && payload.provider !== 'telegram-widget') {
-                    return ResponseUtil.error(c, 'Invalid authentication provider', 401);
+                // Basic check for essential payload fields
+                if (!payload.sub || !payload.provider || !payload.username) {
+                    console.error('Invalid token payload:', payload);
+                    deleteCookie(c, 'auth_token', { path: '/' });
+                    return ResponseUtil.error(c, 'Invalid token payload structure.', 401);
                 }
 
-                console.log(payload);
-
-                if (!ADMIN_USERS.includes(payload.username as string)) {
-                    return ResponseUtil.error(c, 'Invalid username', 401);
+                // Re-validate against admin lists based on provider
+                if (payload.provider === 'telegram' || payload.provider === 'telegram-widget') {
+                    if (!payload.username || !TELEGRAM_ADMIN_USERS.includes(payload.username)) {
+                        deleteCookie(c, 'auth_token', { path: '/' });
+                        return ResponseUtil.error(
+                            c,
+                            'User is no longer an authorized Telegram admin.',
+                            403
+                        );
+                    }
+                } else if (payload.provider === 'github') {
+                    if (!payload.username || !GITHUB_ADMIN_USERS.includes(payload.username)) {
+                        deleteCookie(c, 'auth_token', { path: '/' });
+                        return ResponseUtil.error(
+                            c,
+                            'User is no longer an authorized GitHub admin.',
+                            403
+                        );
+                    }
+                } else {
+                    deleteCookie(c, 'auth_token', { path: '/' });
+                    return ResponseUtil.error(c, 'Unknown authentication provider in token.', 401);
                 }
 
-                return ResponseUtil.success(c, {
-                    valid: true,
-                    user: {
-                        id: payload.userId,
-                        name: payload.name,
-                        username: payload.username,
-                        provider: payload.provider,
-                    },
+                const userContext = {
+                    id: payload.sub, // This is the provider_user_id
+                    provider_user_id: payload.sub,
+                    username: payload.username,
+                    name: payload.name,
+                    provider: payload.provider,
+                    email: payload.email, // if available
+                    avatar_url: payload.avatar_url, // if available
+                };
+
+                // Token is valid, refresh cookie expiration (sliding session)
+                setCookie(c, 'auth_token', token, {
+                    httpOnly: true,
+                    secure: process.env.NODE_ENV === 'production',
+                    sameSite: 'Lax',
+                    path: '/',
+                    maxAge: 7 * 24 * 60 * 60,
                 });
-            } catch {
-                return ResponseUtil.error(c, 'Invalid token', 401);
+
+                return ResponseUtil.success(c, { valid: true, user: userContext });
+            } catch (err) {
+                console.warn('Token verification failed:', err);
+                deleteCookie(c, 'auth_token', { path: '/' });
+                return ResponseUtil.error(c, 'Invalid or malformed token.', 401);
             }
-        } catch {
-            return ResponseUtil.error(c, 'Token verification failed', 401);
+        } catch (error) {
+            console.error('Verify token endpoint error:', error);
+            return ResponseUtil.error(
+                c,
+                'Token verification process failed.',
+                500,
+                true,
+                error as Error
+            );
+        }
+    }
+
+    @Post('/logout')
+    async logout(c: Context) {
+        try {
+            // 从Cookie中获取token，如果存在则尝试验证一下，主要为了记录是哪个用户登出 (可选)
+            const token = getCookie(c, 'auth_token');
+            if (token) {
+                try {
+                    const secret = jwtSecret;
+                    if (secret) {
+                        const payload = (await verify(token, secret)) as any;
+                        console.log(
+                            `User logged out: ${payload.username} (Provider: ${payload.provider})`
+                        );
+                    }
+                } catch (e) {
+                    // Ignore if token is invalid, just proceed to delete cookie
+                    console.warn(
+                        'Error verifying token during logout, cookie will be cleared anyway:',
+                        e
+                    );
+                }
+            }
+
+            deleteCookie(c, 'auth_token', {
+                path: '/',
+                httpOnly: true,
+                secure: process.env.NODE_ENV === 'production',
+                sameSite: 'Lax',
+            });
+            return ResponseUtil.success(c, { message: 'Logged out successfully' });
+        } catch (error) {
+            console.error('Logout error:', error);
+            return ResponseUtil.error(c, 'Logout failed', 500, true, error as Error);
         }
     }
 }
