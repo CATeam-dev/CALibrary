@@ -12,16 +12,69 @@ import { Post, Get } from '@/decorators/http';
 import { ResponseUtil } from '@/core/response';
 import { jwtCreate, jwtSecret } from '@/utils/jwt';
 
+// 环境变量配置
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const GITHUB_CLIENT_ID = process.env.GITHUB_CLIENT_ID;
 const GITHUB_CLIENT_SECRET = process.env.GITHUB_CLIENT_SECRET;
-const APP_URL = process.env.APP_URL || 'http://localhost:3000'; // 用于构建回调URL
+const APP_URL = process.env.APP_URL;
 
-const TELEGRAM_ADMIN_USERS = (process.env.TELEGRAM_ADMIN_USERS || 'codyee,Ancker_0').split(',');
-const GITHUB_ADMIN_USERS = (process.env.GITHUB_ADMIN_USERS || '').split(',').filter((u) => u); // 从环境变量读取，默认为空
+// 管理员用户列表
+const TELEGRAM_ADMIN_USERS = (process.env.TELEGRAM_ADMIN_USERS || '').split(',');
+const GITHUB_ADMIN_USERS = (process.env.GITHUB_ADMIN_USERS || '').split(',').filter((u) => u);
+
+// JWT Token 过期时间 (7天)
+const TOKEN_EXPIRE_TIME = 7 * 24 * 60 * 60;
+
+/**
+ * 设置认证Cookie
+ */
+function setAuthCookie(c: Context, token: string): void {
+    setCookie(c, 'auth_token', token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === 'production',
+        sameSite: 'Lax',
+        path: '/',
+        maxAge: TOKEN_EXPIRE_TIME,
+    });
+}
+
+/**
+ * 创建JWT token
+ */
+async function createJwtToken(userPayload: any): Promise<string> {
+    return await jwtCreate({
+        ...userPayload,
+        exp: Math.floor(Date.now() / 1000) + TOKEN_EXPIRE_TIME,
+    });
+}
+
+/**
+ * 检查用户是否为管理员
+ */
+function checkAdminPermission(provider: string, username: string): boolean {
+    switch (provider) {
+        case 'telegram':
+        case 'telegram-widget':
+            return TELEGRAM_ADMIN_USERS.includes(username);
+        case 'github':
+            return GITHUB_ADMIN_USERS.includes(username);
+        default:
+            return false;
+    }
+}
 
 @Controller('/auth')
 export class AuthController {
+    @Get('/debug-config')
+    async debugConfig(c: Context) {
+        return ResponseUtil.success(c, {
+            telegramAdmins: TELEGRAM_ADMIN_USERS,
+            githubAdmins: GITHUB_ADMIN_USERS,
+            hasBotToken: !!BOT_TOKEN,
+            hasGithubConfig: !!(GITHUB_CLIENT_ID && GITHUB_CLIENT_SECRET),
+            appUrl: APP_URL,
+        });
+    }
     @Post('/telegram')
     async telegramAuth(c: Context) {
         try {
@@ -63,36 +116,33 @@ export class AuthController {
                 return ResponseUtil.error(c, 'User username not found', 401);
             }
 
-            if (!TELEGRAM_ADMIN_USERS.includes(user.username)) {
-                console.log(`Telegram login attempt by non-admin: ${user.username}`);
+            // 检查管理员权限
+            if (!checkAdminPermission('telegram', user.username)) {
+                console.log(
+                    `Telegram login attempt by non-admin: ${user.username}. Available admins: ${TELEGRAM_ADMIN_USERS.join(', ')}`
+                );
                 return ResponseUtil.error(
                     c,
-                    'Access denied. User is not an authorized admin.',
+                    `Access denied. User ${user.username} is not an authorized admin. Available admins: ${TELEGRAM_ADMIN_USERS.join(', ')}`,
                     403
                 );
             }
 
             // 创建 JWT token
-            const token = await jwtCreate({
+            const token = await createJwtToken({
+                sub: tgUserId,
                 userId: tgUserId,
                 username: user.username,
                 name: user.name,
                 provider: 'telegram',
-                exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7天过期
             });
 
-            // 设置HttpOnly和Secure的Cookie
-            setCookie(c, 'auth_token', token, {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production', // 仅在生产环境中使用Secure
-                sameSite: 'Lax',
-                path: '/',
-                maxAge: 7 * 24 * 60 * 60, // Cookie过期时间与JWT一致
-            });
+            // 设置认证Cookie
+            setAuthCookie(c, token);
 
             return ResponseUtil.success(c, {
                 user,
-                expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+                expires: new Date(Date.now() + TOKEN_EXPIRE_TIME * 1000).toISOString(),
             });
         } catch (error) {
             console.error('Telegram auth error:', error);
@@ -149,12 +199,14 @@ export class AuthController {
                 return ResponseUtil.error(c, 'Authentication data expired', 401);
             }
 
-            // 检查用户名是否在管理员列表中
-            if (!username || !TELEGRAM_ADMIN_USERS.includes(username)) {
-                console.log(`Telegram widget login attempt by non-admin: ${username}`);
+            // 检查管理员权限
+            if (!checkAdminPermission('telegram-widget', username)) {
+                console.log(
+                    `Telegram widget login attempt by non-admin: ${username}. Available admins: ${TELEGRAM_ADMIN_USERS.join(', ')}`
+                );
                 return ResponseUtil.error(
                     c,
-                    'Access denied. User is not an authorized admin via widget.',
+                    `Access denied. User ${username} is not an authorized admin via widget. Available admins: ${TELEGRAM_ADMIN_USERS.join(', ')}`,
                     403
                 );
             }
@@ -167,26 +219,20 @@ export class AuthController {
             };
 
             // 创建 JWT token
-            const token = await jwtCreate({
+            const token = await createJwtToken({
+                sub: id.toString(),
                 userId: id.toString(),
                 username,
                 name: user.name,
                 provider: 'telegram-widget',
-                exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7天过期
             });
 
-            // 设置HttpOnly和Secure的Cookie
-            setCookie(c, 'auth_token', token, {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production', // 仅在生产环境中使用Secure
-                sameSite: 'Lax',
-                path: '/',
-                maxAge: 7 * 24 * 60 * 60, // Cookie过期时间与JWT一致
-            });
+            // 设置认证Cookie
+            setAuthCookie(c, token);
 
             return ResponseUtil.success(c, {
                 user,
-                expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
+                expires: new Date(Date.now() + TOKEN_EXPIRE_TIME * 1000).toISOString(),
             });
         } catch (error) {
             console.error('Telegram widget auth error:', error);
@@ -317,8 +363,8 @@ export class AuthController {
                 return ResponseUtil.error(c, 'Could not retrieve GitHub username.', 400);
             }
 
-            // Check if the GitHub user is an admin
-            if (!GITHUB_ADMIN_USERS.includes(githubUsername)) {
+            // 检查管理员权限
+            if (!checkAdminPermission('github', githubUsername)) {
                 console.log(`GitHub login attempt by non-admin: ${githubUsername}`);
                 return ResponseUtil.error(
                     c,
@@ -328,36 +374,32 @@ export class AuthController {
             }
 
             const userPayload = {
+                sub: githubUser.id.toString(),
                 provider_user_id: githubUser.id.toString(),
                 username: githubUsername,
                 name: githubUser.name || githubUsername,
-                email: githubUser.email, // May be null if not public
+                email: githubUser.email,
                 avatar_url: githubUser.avatar_url,
                 provider: 'github',
             };
 
-            const jwtToken = await jwtCreate({
-                sub: githubUser.id.toString(),
-                ...userPayload,
-                exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60, // 7天过期
-            });
+            // 创建JWT token并设置Cookie
+            const jwtToken = await createJwtToken(userPayload);
+            setAuthCookie(c, jwtToken);
 
-            setCookie(c, 'auth_token', jwtToken, {
-                httpOnly: true,
-                secure: process.env.NODE_ENV === 'production',
-                sameSite: 'Lax',
-                path: '/',
-                maxAge: 7 * 24 * 60 * 60,
-            });
+            // For browser requests, redirect to the success page
+            const userAgent = c.req.header('User-Agent') || '';
+            const isApiRequest = c.req.header('Accept')?.includes('application/json');
 
-            // Redirect to frontend admin page or a success page
-            // For SPA, it's often better to return user data and let frontend handle redirect.
-            // Here, we redirect to the admin dashboard as an example.
-            // return c.redirect('/admin', 302); // Or return user data
+            if (!isApiRequest && userAgent.includes('Mozilla')) {
+                // Browser request - redirect to success page
+                return c.redirect('/admin/auth/github/success', 302);
+            }
+
+            // API request - return JSON response
             return ResponseUtil.success(c, {
                 user: userPayload,
-                expires: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(),
-                // message: 'GitHub authentication successful. Redirecting...' // Optional message
+                expires: new Date(Date.now() + TOKEN_EXPIRE_TIME * 1000).toISOString(),
             });
         } catch (error) {
             console.error('GitHub callback processing error:', error);
@@ -408,27 +450,9 @@ export class AuthController {
                 }
 
                 // Re-validate against admin lists based on provider
-                if (payload.provider === 'telegram' || payload.provider === 'telegram-widget') {
-                    if (!payload.username || !TELEGRAM_ADMIN_USERS.includes(payload.username)) {
-                        deleteCookie(c, 'auth_token', { path: '/' });
-                        return ResponseUtil.error(
-                            c,
-                            'User is no longer an authorized Telegram admin.',
-                            403
-                        );
-                    }
-                } else if (payload.provider === 'github') {
-                    if (!payload.username || !GITHUB_ADMIN_USERS.includes(payload.username)) {
-                        deleteCookie(c, 'auth_token', { path: '/' });
-                        return ResponseUtil.error(
-                            c,
-                            'User is no longer an authorized GitHub admin.',
-                            403
-                        );
-                    }
-                } else {
+                if (!checkAdminPermission(payload.provider, payload.username)) {
                     deleteCookie(c, 'auth_token', { path: '/' });
-                    return ResponseUtil.error(c, 'Unknown authentication provider in token.', 401);
+                    return ResponseUtil.error(c, 'User is no longer an authorized admin.', 403);
                 }
 
                 const userContext = {
@@ -442,13 +466,7 @@ export class AuthController {
                 };
 
                 // Token is valid, refresh cookie expiration (sliding session)
-                setCookie(c, 'auth_token', token, {
-                    httpOnly: true,
-                    secure: process.env.NODE_ENV === 'production',
-                    sameSite: 'Lax',
-                    path: '/',
-                    maxAge: 7 * 24 * 60 * 60,
-                });
+                setAuthCookie(c, token);
 
                 return ResponseUtil.success(c, { valid: true, user: userContext });
             } catch (err) {

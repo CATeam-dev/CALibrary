@@ -6,6 +6,10 @@ import { Controller } from '@/decorators/controller';
 import { Get } from '@/decorators/http';
 import { ResponseUtil } from '@/core/response';
 import { prisma } from '@/utils/db';
+// Export controllers for proper registration
+export { AdminController } from './admin';
+export { AuthController } from './auth';
+export { WebAppController } from './webapp';
 
 @Controller('/')
 export class IndexController {
@@ -327,4 +331,5 @@ export class IndexController {
             },
         });
     }
+
 }

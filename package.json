@@ -55,7 +55,8 @@
         "picocolors": "^1.1.1",
         "prisma-extension-random": "^0.2.2",
         "proxy-agent": "^6.5.0",
-        "reflect-metadata": "^0.2.2"
+        "reflect-metadata": "^0.2.2",
+        "zod": "^4.0.2"
     },
     "lint-staged": {
         "*.{js,ts}": [

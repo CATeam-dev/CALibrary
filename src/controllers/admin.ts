@@ -7,7 +7,7 @@ import { createHash } from 'crypto';
 
 import axios from 'axios';
 import { z } from 'zod';
-import { FileFormat } from '@prisma/client';
+import { FileFormat } from '@generated/prisma';
 
 import { Controller } from '@/decorators/controller';
 import { Delete, Get, Post, Put } from '@/decorators/http';
