@@ -1,6 +1,7 @@
 import type { Context } from 'hono';
 
 import path from 'path';
+import { existsSync, statSync } from 'fs';
 
 import { Controller } from '@/decorators/controller';
 import { Get } from '@/decorators/http';
@@ -316,20 +317,50 @@ export class IndexController {
 
     @Get('/covers/:filename')
     async covers(c: Context) {
-        const { filename } = await c.req.param();
-
+        const { filename } = c.req.param();
         if (!filename) {
-            return ResponseUtil.error(c, 'Filename is required');
+            return ResponseUtil.error(c, 'Filename not provided', 400);
         }
 
-        const filepath = path.join(process.env.STORAGE_PATH || '', 'covers', filename + '.jpg');
-        const file = await Bun.file(filepath).arrayBuffer();
+        const STORAGE_PATH = process.env.STORAGE_PATH || path.join(process.cwd(), 'uploads');
+        const COVERS_DIR = path.join(STORAGE_PATH, 'covers');
+        const imagePath = path.join(COVERS_DIR, filename);
 
-        return new Response(file, {
-            headers: {
-                'Content-Type': 'image/jpeg',
-            },
-        });
+        if (!existsSync(imagePath)) {
+            return ResponseUtil.error(c, 'Image not found', 404);
+        }
+
+        try {
+            const fileStream = Bun.file(imagePath);
+            const stats = statSync(imagePath);
+            let contentType = Bun.file(imagePath).type;
+
+            if (!contentType) {
+                const ext = filename.split('.').pop()?.toLowerCase();
+                if (ext === 'png') {
+                    contentType = 'image/png';
+                } else if (ext === 'gif') {
+                    contentType = 'image/gif';
+                } else {
+                    contentType = 'image/jpeg';
+                }
+            }
+
+            if (stats.size === 0) {
+                return ResponseUtil.error(c, 'Image not found or is empty', 404);
+            }
+
+            return new Response(fileStream, {
+                headers: {
+                    'Content-Type': contentType,
+                    'Content-Length': stats.size.toString(),
+                    'Cache-Control': 'public, max-age=604800',
+                },
+            });
+        } catch (error) {
+            console.error('Failed to serve image:', error);
+            return ResponseUtil.error(c, 'Failed to serve image', 500);
+        }
     }
 
 }

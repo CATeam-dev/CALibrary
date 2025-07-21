@@ -249,32 +249,47 @@ export class AdminController {
         '/category/reorder',
         authMiddleware,
         validator('json', (value, c) => {
+            console.log('Received raw value in validator:', JSON.stringify(value, null, 2));
+            console.log('Value type:', typeof value);
+            console.log('Is array:', Array.isArray(value));
+            
             const reorderSchema = z
                 .array(
                     z.object({
-                        id: z.string().cuid(),
+                        id: z.string().min(1),
                         index: z.number().int().min(0),
                     })
                 )
                 .min(1);
             const parsed = reorderSchema.safeParse(value);
             if (!parsed.success) {
+                console.error('Reorder validation failed:', parsed.error);
+                console.error('Failed value:', JSON.stringify(value, null, 2));
                 return c.json(
-                    { error: 'Invalid input', issues: parsed.error.flatten().fieldErrors },
+                    { 
+                        error: 'Invalid input', 
+                        issues: parsed.error.flatten().fieldErrors,
+                        details: parsed.error.issues
+                    },
                     400
                 );
             }
+            console.log('Validation passed, returning:', parsed.data);
             return parsed.data;
         })
     )
     async reorderCategories(c: Context) {
         const categoriesToReorder = c.req.valid('json');
+        
+        console.log('Received reorder payload:', JSON.stringify(categoriesToReorder, null, 2));
 
         if (!Array.isArray(categoriesToReorder)) {
+            console.error('categoriesToReorder is not an array:', typeof categoriesToReorder);
             return ResponseUtil.error(c, 'categoriesToReorder must be an array');
         }
 
         if (categoriesToReorder.length === 0) {
+            console.error('categoriesToReorder array is empty');
             return ResponseUtil.error(c, 'categoriesToReorder array cannot be empty');
         }
 
@@ -296,10 +311,10 @@ export class AdminController {
             // 使用事务来确保数据一致性
             await prisma.$transaction(async (tx: any) => {
                 // 更新每个分类的index
-                for (let i = 0; i < categoriesToReorder.length; i++) {
+                for (const category of categoriesToReorder) {
                     await tx.category.update({
-                        where: { id: categoriesToReorder[i].id },
-                        data: { index: i },
+                        where: { id: category.id },
+                        data: { index: category.index },
                     });
                 }
             });
@@ -374,9 +389,15 @@ export class AdminController {
                 categoryId: z.string().cuid(),
                 cover: z
                     .string()
-                    .url({ message: 'Invalid URL for cover image' })
-                    .optional()
-                    .nullable(),
+                    .min(1, 'Cover image URL is required')
+                    .refine((val) => {
+                        // Allow relative URLs starting with /
+                        if (val.startsWith('/')) return true;
+                        // Allow absolute URLs
+                        return z.string().url().safeParse(val).success;
+                    }, {
+                        message: 'Invalid URL for cover image'
+                    }),
                 doubanId: z.string().optional().nullable(),
             });
             const parsed = bookSchema.safeParse(value);
@@ -427,9 +448,17 @@ export class AdminController {
                 categoryId: z.string().cuid().optional(),
                 cover: z
                     .string()
-                    .url({ message: 'Invalid URL for cover image' })
+                    .min(1, 'Cover image URL is required')
                     .optional()
-                    .nullable(),
+                    .refine((val) => {
+                        if (!val) return true;
+                        // Allow relative URLs starting with /
+                        if (val.startsWith('/')) return true;
+                        // Allow absolute URLs
+                        return z.string().url().safeParse(val).success;
+                    }, {
+                        message: 'Invalid URL for cover image'
+                    }),
                 doubanId: z.string().optional().nullable(),
             });
             const parsed = bookUpdateSchema.safeParse(value);
@@ -776,49 +805,225 @@ export class AdminController {
         }
     }
 
-    // 新增路由，用于提供封面图片服务
-    @Get('/covers/:filename')
-    async serveCoverImage(c: Context) {
-        const { filename } = c.req.param();
-        if (!filename) {
-            return ResponseUtil.error(c, 'Filename not provided', 400);
-        }
-        const imagePath = join(COVERS_DIR, filename);
 
-        if (!existsSync(imagePath)) {
-            return ResponseUtil.error(c, 'Image not found', 404);
-        }
-
+    // 统计功能相关的API
+    @Get('/stats/overview', authMiddleware)
+    async getStatsOverview(c: Context) {
         try {
-            const fileStream = Bun.file(imagePath);
-            const stats = statSync(imagePath);
-            let contentType = Bun.file(imagePath).type;
+            // 并行获取所有统计数据
+            const [totalBooks, totalViews, totalDownloads, totalFileChunkSize, totalFileCount] = await Promise.all([
+                // 总书籍数
+                prisma.book.count(),
+                // 总浏览量
+                prisma.book.aggregate({
+                    _sum: {
+                        viewCount: true,
+                    },
+                }),
+                // 总下载量
+                prisma.book.aggregate({
+                    _sum: {
+                        downloadCount: true,
+                    },
+                }),
+                // 从文件分块获取准确的总大小
+                prisma.fileChunk.aggregate({
+                    _sum: {
+                        size: true,
+                    },
+                }),
+                // 总文件数
+                prisma.file.count(),
+            ]);
 
-            if (!contentType) {
-                const ext = filename.split('.').pop()?.toLowerCase();
-                if (ext === 'png') {
-                    contentType = 'image/png';
-                } else if (ext === 'gif') {
-                    contentType = 'image/gif';
-                } else {
-                    contentType = 'image/jpeg';
-                }
-            }
+            const totalViews_value = totalViews._sum.viewCount || 0;
+            const totalDownloads_value = totalDownloads._sum.downloadCount || 0;
+            const totalFileSizeBytes = totalFileChunkSize._sum.size || 0;
 
-            if (stats.size === 0) {
-                return ResponseUtil.error(c, 'Image not found or is empty', 404);
-            }
+            // 计算流量（下载总大小）= 平均每次下载的文件大小 * 总下载次数
+            // 假设平均每次下载一个完整文件
+            const avgFileSizePerDownload = totalFileCount > 0 ? totalFileSizeBytes / totalFileCount : 0;
+            const estimatedTrafficBytes = avgFileSizePerDownload * totalDownloads_value;
 
-            return new Response(fileStream, {
-                headers: {
-                    'Content-Type': contentType,
-                    'Content-Length': stats.size.toString(),
-                    'Cache-Control': 'public, max-age=604800',
-                },
+            console.log('Stats calculation:', {
+                totalBooks,
+                totalViews_value,
+                totalDownloads_value,
+                totalFileSizeBytes,
+                totalFileCount,
+                avgFileSizePerDownload,
+                estimatedTrafficBytes
             });
-        } catch (error) {
-            console.error('Failed to serve image:', error);
-            return ResponseUtil.error(c, 'Failed to serve image', 500);
+
+            return ResponseUtil.success(c, {
+                totalBooks,
+                totalViews: totalViews_value,
+                totalDownloads: totalDownloads_value,
+                totalFileSize: totalFileSizeBytes,
+                totalTraffic: estimatedTrafficBytes,
+            });
+        } catch (error: any) {
+            console.error('Get stats overview error:', error);
+            return ResponseUtil.error(c, error.message || 'Failed to get stats overview');
         }
     }
+
+    @Get('/stats/top-books', authMiddleware)
+    async getTopBooks(c: Context) {
+        const { limit = '10', sortBy = 'views' } = c.req.query();
+        const limitInt = parseInt(limit) || 10;
+        
+        try {
+            const orderBy = sortBy === 'downloads' 
+                ? { downloadCount: 'desc' as const }
+                : { viewCount: 'desc' as const };
+
+            const topBooks = await prisma.book.findMany({
+                orderBy,
+                take: limitInt,
+                include: {
+                    Category: {
+                        select: {
+                            name: true,
+                            path: true,
+                            color: true,
+                        },
+                    },
+                },
+            });
+
+            return ResponseUtil.success(c, topBooks.map(book => ({
+                id: book.id,
+                title: book.title,
+                author: book.author,
+                viewCount: book.viewCount,
+                downloadCount: book.downloadCount,
+                category: book.Category,
+                createdAt: book.createdAt,
+            })));
+        } catch (error: any) {
+            console.error('Get top books error:', error);
+            return ResponseUtil.error(c, error.message || 'Failed to get top books');
+        }
+    }
+
+    @Get('/stats/category-stats', authMiddleware)
+    async getCategoryStats(c: Context) {
+        try {
+            const categories = await prisma.category.findMany({
+                orderBy: { index: 'asc' },
+                include: {
+                    books: {
+                        select: {
+                            viewCount: true,
+                            downloadCount: true,
+                            public: true,
+                        },
+                    },
+                },
+            });
+
+            const categoryStats = categories.map(category => {
+                const totalBooks = category.books.length;
+                const publicBooks = category.books.filter(book => book.public).length;
+                const totalViews = category.books.reduce((sum, book) => sum + book.viewCount, 0);
+                const totalDownloads = category.books.reduce((sum, book) => sum + book.downloadCount, 0);
+
+                return {
+                    id: category.id,
+                    name: category.name,
+                    path: category.path,
+                    color: category.color,
+                    totalBooks,
+                    publicBooks,
+                    totalViews,
+                    totalDownloads,
+                };
+            });
+
+            return ResponseUtil.success(c, categoryStats);
+        } catch (error: any) {
+            console.error('Get category stats error:', error);
+            return ResponseUtil.error(c, error.message || 'Failed to get category stats');
+        }
+    }
+
+    @Get('/stats/recent-activity', authMiddleware)
+    async getRecentActivity(c: Context) {
+        const { limit = '20' } = c.req.query();
+        const limitInt = parseInt(limit) || 20;
+        
+        try {
+            // 获取最近有活动的书籍（有浏览或下载记录的）
+            const recentBooks = await prisma.book.findMany({
+                where: {
+                    OR: [
+                        { viewCount: { gt: 0 } },
+                        { downloadCount: { gt: 0 } },
+                    ],
+                },
+                orderBy: { updatedAt: 'desc' },
+                take: limitInt,
+                include: {
+                    Category: {
+                        select: {
+                            name: true,
+                            path: true,
+                            color: true,
+                        },
+                    },
+                    File: {
+                        select: {
+                            format: true,
+                        },
+                        take: 1, // 只取第一个文件格式作为示例
+                    },
+                },
+            });
+
+            // 构造活动列表，混合view和download活动
+            const activities: any[] = [];
+            
+            recentBooks.forEach(book => {
+                // 如果有下载记录，添加下载活动
+                if (book.downloadCount > 0) {
+                    activities.push({
+                        id: `${book.id}-download`,
+                        type: 'download',
+                        bookTitle: book.title,
+                        bookId: book.id,
+                        format: book.File.length > 0 ? book.File[0].format : null,
+                        category: book.Category,
+                        timestamp: book.updatedAt,
+                        count: book.downloadCount,
+                    });
+                }
+                
+                // 如果有浏览记录，添加浏览活动
+                if (book.viewCount > 0) {
+                    activities.push({
+                        id: `${book.id}-view`,
+                        type: 'view',
+                        bookTitle: book.title,
+                        bookId: book.id,
+                        format: null,
+                        category: book.Category,
+                        timestamp: book.updatedAt,
+                        count: book.viewCount,
+                    });
+                }
+            });
+
+            // 按时间排序并限制数量
+            const sortedActivities = activities
+                .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+                .slice(0, limitInt);
+
+            return ResponseUtil.success(c, sortedActivities);
+        } catch (error: any) {
+            console.error('Get recent activity error:', error);
+            return ResponseUtil.error(c, error.message || 'Failed to get recent activity');
+        }
+    }
+
 }

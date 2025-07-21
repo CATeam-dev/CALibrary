@@ -48,6 +48,12 @@ model Book {
 
     Category Category? @relation(fields: [categoryId], references: [id])
     File     File[]
+
+    @@index([viewCount(sort: Desc)])
+    @@index([downloadCount(sort: Desc)])
+    @@index([public])
+    @@index([categoryId])
+    @@index([createdAt])
 }
 
 enum FileFormat {
@@ -85,3 +91,4 @@ model FileChunk {
     updatedAt DateTime @updatedAt
     File      File     @relation(fields: [fileId], references: [id])
 }
+
